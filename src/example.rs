@@ -141,6 +141,55 @@ fn example_multi_step() {
     let _outcome = run(cmd);
 }
 
+// ============================================================================
+// Positive cuts
+// ============================================================================
+
+fn example_positive_atomic_cut() {
+    let x: Var<'static, AtomP<X>> = Var::new();
+    let z: Var<'static, AtomN<X>> = Var::new();
+
+    // μ⁺α.⟨x | α⟩  cut against  z
+    let binder = mu_pos::<'static, AtomP<X>, _>(|a: Var<'_, AtomN<X>>| cut(x, a));
+    let cmd = cut_pos_atom(binder, z);
+
+    let _outcome = run(cmd); // Stuck(StaticOnly) — normal form ⟨x | z⟩
+}
+
+// ============================================================================
+// Additive connectives
+// ============================================================================
+
+fn example_additive_left() {
+    let x: Var<'static, AtomP<X>> = Var::new();
+    let m: Var<'static, AtomN<X>> = Var::new();
+    let n: Var<'static, AtomN<Y>> = Var::new();
+
+    let val = PlusValue::<'static, AtomP<X>, AtomP<Y>>::Inl(x);
+    let binder = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+        |a| cut_atom(a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
+        |_b| cut_atom(_b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n))),
+    );
+
+    let cmd = cut_plus(val, binder);
+    let _outcome = run(cmd); // Takes left branch
+}
+
+fn example_additive_right() {
+    let y: Var<'static, AtomP<Y>> = Var::new();
+    let m: Var<'static, AtomN<X>> = Var::new();
+    let n: Var<'static, AtomN<Y>> = Var::new();
+
+    let val = PlusValue::<'static, AtomP<X>, AtomP<Y>>::Inr(y);
+    let binder = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+        |_a| cut_atom(_a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
+        |b| cut_atom(b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n))),
+    );
+
+    let cmd = cut_plus(val, binder);
+    let _outcome = run(cmd); // Takes right branch
+}
+
 fn main() {
     example_atomic_axiom();
     example_mu_neg();
@@ -153,4 +202,7 @@ fn main() {
     example_unit_reduction();
     example_composite_reduction();
     example_multi_step();
+    example_positive_atomic_cut();
+    example_additive_left();
+    example_additive_right();
 }

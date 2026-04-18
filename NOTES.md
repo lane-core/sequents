@@ -2,10 +2,10 @@
 
 ## What this library is
 
-A trait-based embedding of the multiplicative fragment of linear classical
-System L, with static well-formedness enforced by Rust's type system and
-operational semantics implemented as continuation-based commands (Krivine-
-machine style).
+A trait-based embedding of the multiplicative and additive fragments of
+linear classical System L, with static well-formedness enforced by Rust's
+type system and operational semantics implemented as continuation-based
+commands (Krivine-machine style).
 
 Scope structure is carried by lifetimes. Linearity is enforced by non-Copy
 move semantics. Polarity is a trait-level predicate with operational content.
@@ -40,9 +40,9 @@ These are load-bearing and should not be revisited without good reason:
 
 6. **Continuation-based commands.** `Command<'s>` is a struct wrapping
    `Box<dyn FnOnce() -> Outcome<'s> + 's>`. Reduction is invocation. Each
-   specific cut (`cut_atom`, `cut_par`, `cut_unit`) builds a closure that
-   performs its reduction step when invoked. A trampolined `run()` driver
-   loops until `Done` or `Stuck`.
+   specific cut (`cut_atom`, `cut_par`, `cut_unit`, `cut_pos_atom`,
+   `cut_plus`) builds a closure that performs its reduction step when invoked.
+   A trampolined `run()` driver loops until `Done` or `Stuck`.
 
 7. **Specific-lifetime closures, not HRTB.** Binder bodies take concrete
    lifetimes (`FnOnce(Var<'s, A>) -> Command<'s>`), not higher-rank
@@ -97,28 +97,54 @@ binder's parameters.
 - `cut_par` reduces a tensor-par cut by destructuring the pair and invoking
   the body with the components; composite values are handled by nested
   `cut_par` calls
+- `cut_pos_atom` reduces a positive atomic cut by invoking the binder body
+  with the covariable
+- `cut_plus` reduces an additive cut by dispatching on `PlusValue::Inl` or
+  `PlusValue::Inr` and invoking the matching body
 - `run()` drives a command to terminal state
 
 ### Connectives
 - Atoms: `AtomP<X>`, `AtomN<X>`
 - Units: `One`, `Bot`
 - Multiplicatives: `Tensor<A, B>`, `Par<A, B>`
+- Additives: `Plus<A, B>`, `With<A, B>`
+
+## Extension findings
+
+### Positive cuts (Extension 1)
+
+The `MuPos` binder was redefined to bind a covariable of type `A::Dual`
+(negative), not a value of type `A`. In classical System L, `μ⁺α.c` binds
+`α : A⊥`. The body receives `A::Dual::CoValue<'s>`. For atoms this is
+`Var<'s, AtomN<X>>`.
+
+`cut_pos_atom` is the operational positive atomic cut. Composite positive
+cuts are an open question — they would require an environment or a different
+reduction strategy, as `Par` co-values don't have standalone constructors.
+
+### Additives (Extension 2)
+
+`Plus<A, B>` has `PlusValue<'s, A, B>` with `Inl` and `Inr` constructors.
+`With<A, B>` has `CoValue<'s> = Infallible` — its co-expressions are
+introduced only via the `MuCase` binder.
+
+`MuCase` carries two bodies (`body_left` and `body_right`), both kept alive
+until the cut happens. At cut time, `cut_plus` matches on `PlusValue` and
+invokes the appropriate body, dropping the other. This is the first reduction
+in the library with runtime dispatch — the value's shape determines which
+branch runs.
+
+`Done` remains unused. All well-typed additive cuts reduce to
+`Stuck(StaticOnly)` (normal form) because the generic `cut` has no reduction
+rule. `Done` is reserved for future extensions with genuine terminal
+configurations.
 
 ## What is not in the library yet
 
-- **Positive cuts (`cut_pos`):** `MuPos` and `mu_pos` are defined but not
-  exercised operationally. A positive cut `⟨μx⁺.c | V⟩` would reduce by
-  invoking the binder body with `V`. The atomic case is straightforward.
-  Composite positive cuts against `Par` co-values go through `MuPar` (already
-  implemented).
-
-- **Additives (`A ⊕ B` and `A & B`):** Sum types with left/right injections
-  and case destructors. This would exercise runtime dispatch (the value selects
-  which branch of the case to run).
-
 - **Exponentials (`!A` and `?A`):** Controlled weakening and contraction.
   Requires `Clone` semantics for values, which conflicts with the current
-  linearity-by-move design. This is a substantial extension.
+  linearity-by-move design. This is a substantial extension that needs
+  architectural discussion before implementation.
 
 ## Ergonomic costs
 
@@ -152,15 +178,11 @@ trait solver does not propagate this implication automatically.
 
 ## Test suite
 
-The test suite has 15 tests:
+The test suite has 19 tests:
 
-- 9 static well-formedness tests (carried from earlier iterations)
-- 6 operational tests:
-  - `milestone_1_atomic_cut_reduces`
-  - `milestone_2_unit_cut_reduces`
-  - `milestone_3_tensor_par_atoms`
-  - `milestone_4_tensor_par_composites`
-  - `milestone_5_multi_step`
-  - `milestone_6_nested_binders`
+- 9 static well-formedness tests
+- 6 multiplicative operational tests (Milestones 1–6)
+- 1 positive cut test (Extension 1)
+- 3 additive tests: duality, left dispatch, right dispatch (Extension 2)
 
 All tests pass on stable Rust (2024 edition).
