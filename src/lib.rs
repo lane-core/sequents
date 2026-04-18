@@ -185,10 +185,11 @@ where
 // 7.  Binder types
 // =============================================================================
 
-/// Positive μ-binder `μx⁺.c` at scope `'s`.
+/// Positive μ-binder `μ⁺α.c` at scope `'s`.
 ///
-/// The body receives `A::Value<'s>` — the introduction form for `A` at
-/// scope `'s`.  For atoms this is a `Var`; for tensors it is a pair.
+/// In classical System L, `μ⁺α.c` binds a covariable `α` of type `A::Dual`
+/// (negative).  The body receives `A::Dual::CoValue<'s>` — the co-value
+/// form for the dual of `A`.  For atomic types this is a negative `Var`.
 pub struct MuPos<'s, A: Pos, F> {
     pub body: F,
     _marker: PhantomData<&'s ()>,
@@ -226,7 +227,12 @@ pub struct MuPar<'s, A: Pos, B: Pos, F> {
 // 8.  Binder trait implementations
 // =============================================================================
 
-impl<'s, A: Pos, F> Expr<'s, A> for MuPos<'s, A, F> where F: FnOnce(A::Value<'s>) -> Command<'s> {}
+impl<'s, A: Pos, F> Expr<'s, A> for MuPos<'s, A, F>
+where
+    A::Dual: Neg,
+    F: FnOnce(<A::Dual as Neg>::CoValue<'s>) -> Command<'s>,
+{
+}
 
 impl<'s, N: Neg, F> CoExpr<'s, N> for MuNeg<'s, N, F>
 where
@@ -324,10 +330,11 @@ pub fn run<'s>(mut cmd: Command<'s>) -> Outcome<'s> {
 // 10. Constructors
 // =============================================================================
 
-/// Positive μ-binder: `μx⁺.c`.
+/// Positive μ-binder: `μ⁺α.c`.
 pub fn mu_pos<'s, A: Pos, F>(body: F) -> MuPos<'s, A, F>
 where
-    F: FnOnce(A::Value<'s>) -> Command<'s>,
+    A::Dual: Neg,
+    F: FnOnce(<A::Dual as Neg>::CoValue<'s>) -> Command<'s>,
 {
     MuPos {
         body,
@@ -436,6 +443,25 @@ where
     let body = binder.body;
     Command {
         step: Box::new(move || Outcome::Step(body())),
+    }
+}
+
+/// Positive atomic cut: `⟨μ⁺α.c | x⊥⟩` where `x⊥` is a covariable.
+///
+/// Reduction rule: invoke the binder body with the covariable.
+///
+/// For atomic types, `AtomN<X>::CoValue<'s> = Var<'s, AtomN<X>>`, so the
+/// binder body receives the covariable directly.
+pub fn cut_pos_atom<'s, X: 'static, F>(
+    binder: MuPos<'s, AtomP<X>, F>,
+    v: Var<'s, AtomN<X>>,
+) -> Command<'s>
+where
+    F: FnOnce(Var<'s, AtomN<X>>) -> Command<'s> + 's,
+{
+    let body = binder.body;
+    Command {
+        step: Box::new(move || Outcome::Step(body(v))),
     }
 }
 
@@ -702,6 +728,21 @@ mod tests {
 
         let outcome = run(cmd);
         // Two reduction steps lead to cut(x, w), which is static-only stuck.
+        assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
+    }
+
+    /// **Extension 1**: Positive atomic cut reduces.
+    /// `cut_pos_atom(μ⁺α.⟨x | α⟩, z)` should step to `⟨x | z⟩`.
+    #[test]
+    fn extension_1_positive_atomic_cut() {
+        let x: Var<'static, AtomP<X>> = Var::new();
+        let z: Var<'static, AtomN<X>> = Var::new();
+
+        let binder = mu_pos::<'static, AtomP<X>, _>(|a: Var<'_, AtomN<X>>| cut(x, a));
+        let cmd = cut_pos_atom(binder, z);
+
+        let outcome = run(cmd);
+        // After one step, we get `cut(x, z)` which is stuck (static only)
         assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
     }
 
