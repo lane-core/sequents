@@ -4,7 +4,6 @@ use crate::types::{
     Bang, BangIntro, Bot, Coterm, One, Par, Plus, PlusIntro, Pos, Tensor, Term, Whynot, With,
     WithBody,
 };
-use crate::var::Var;
 
 /// Generic cut: `⟨t | V⟩`.
 ///
@@ -82,35 +81,23 @@ where
     }
 }
 
-/// Positive atomic cut: `⟨μ⁺α.c | x⊥⟩` where `x⊥` is a covariable.
+/// Positive binder vs coterm: `⟨μ⁺α.c | e⟩`.
 ///
-/// Reduction rule: invoke the binder body with the coterm.
-pub fn cut_pos_atom<'s, X: 'static, F>(
-    binder: MuPos<'s, crate::types::AtomP<X>, F>,
-    coterm: Coterm<'s, crate::types::AtomN<X>>,
+/// Reduction rule: invoke the positive binder body with the coterm.
+/// Accepts any `impl Into<Coterm>` so callers can pass `Var` directly
+/// (auto-wrapped via `From<Var>`) or a pre-constructed `Coterm`.
+pub fn cut_pos<'s, A: Pos, F>(
+    binder: MuPos<'s, A, F>,
+    coterm: impl Into<Coterm<'s, A::Dual>>,
 ) -> Command<'s>
-where
-    F: FnOnce(Coterm<'s, crate::types::AtomN<X>>) -> Command<'s> + 's,
-{
-    let body = binder.body;
-    Command {
-        step: Box::new(move || Outcome::Step(body(coterm))),
-    }
-}
-
-/// Positive binder vs covariable: `⟨μ⁺α.c | x⊥⟩` for any positive type.
-///
-/// Reduction rule: wrap the covariable as `Coterm::Var` and pass it to
-/// the `MuPos` body.  This is the generic form of `cut_pos_atom` that
-/// works for all positive types, not just atoms.
-pub fn cut_pos_var<'s, A: Pos, F>(binder: MuPos<'s, A, F>, var: Var<'s, A::Dual>) -> Command<'s>
 where
     F: FnOnce(Coterm<'s, A::Dual>) -> Command<'s> + 's,
     A::Dual: crate::types::Neg,
 {
+    let coterm = coterm.into();
     let body = binder.body;
     Command {
-        step: Box::new(move || Outcome::Step(body(Coterm::Var(var)))),
+        step: Box::new(move || Outcome::Step(body(coterm))),
     }
 }
 

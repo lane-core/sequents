@@ -14,8 +14,8 @@ All 39 tests pass (34 original adapted + 5 new gap-closing tests). `cargo clippy
 | 4. Multiplicatives migrated | ✅ | `Tensor::Intro = (Term, Term)`, `Par::Body = Box<dyn FnOnce(Term, Term) -> Command>` |
 | 5. Additives migrated | ✅ | `PlusIntro`, `WithBody` |
 | 6. Exponentials migrated | ✅ | `BangIntro`, `Whynot::Body` |
-| 7. Missing cut rules | ✅ | `cut_pos_var` (generic), atomic commuting conversion test |
-| 8. Cut unification | ✅ | `cut_pos_var` is generic; commuting conversions stay per-connective |
+| 7. Missing cut rules | ✅ | `cut_pos` (generic), atomic commuting conversion test |
+| 8. Cut unification | ✅ | `cut_pos` is generic; commuting conversions stay per-connective |
 | 9. Examples updated | ✅ | `example.rs` adapted |
 | 10. Catalog verification | ✅ | See below |
 
@@ -72,9 +72,13 @@ pub enum Coterm<'s, N: Neg> {
 impl<'s, A: Pos> From<Var<'s, A>> for Term<'s, A> {
     fn from(v: Var<'s, A>) -> Self { Term::Var(v) }
 }
+
+impl<'s, N: Neg> From<Var<'s, N>> for Coterm<'s, N> {
+    fn from(v: Var<'s, N>) -> Self { Coterm::Var(v) }
+}
 ```
 
-This lets `tensor(x, y)` auto-wrap leaf variables. No other implicit wrapping is provided.
+These let `tensor(x, y)` auto-wrap leaf variables on the positive side, and `cut_pos(binder, v)` auto-wrap a `Var` into a `Coterm::Var` on the negative side. No other implicit wrapping is provided.
 
 ---
 
@@ -82,7 +86,7 @@ This lets `tensor(x, y)` auto-wrap leaf variables. No other implicit wrapping is
 
 ### Generic
 
-- **`cut_pos_var<'s, A: Pos, F>`** — `MuPos` vs `Var` for **any** positive type. One function handles all five `MuPos`-vs-`Var` configurations (atomic, unit, tensor, plus, bang). This is the unification win: the uniform `Coterm::Var` variant makes it possible.
+- **`cut_pos<'s, A: Pos, F>`** — `MuPos` vs `Coterm` for **any** positive type. One function handles all positive-binder-meets-coterm configurations: `Var` auto-wraps via `From<Var>`, and `Body` is passed directly. This is the unification win.
 
 ### Per-connective (principal cuts)
 
@@ -103,11 +107,9 @@ These must be per-connective because the introduction form's shape varies (tuple
 
 These could theoretically unify if `Neg::Body<'s>` were always a single boxed closure. But `With<A, B>::Body<'s>` is a struct (`WithBody`) with two fields, not a boxed closure. A fully generic commuting-conversion cut would need to abstract over "how to wrap a binder into a `Coterm::Body`", which requires either a trait with an associated type or higher-kinded types. The substrate (Rust's type system) doesn't support this cleanly without adding complexity that exceeds the value. Per-connective wrappers are the right tradeoff.
 
-### Per-connective thin wrappers (positive atomic)
+### Convenience
 
-- **`cut_pos_atom`** — `MuPos<AtomP<X>>` vs `Coterm<AtomN<X>>`
-
-This is a thin wrapper over the same pattern as `cut_pos_var`, but specialized to atoms because `AtomN::Body` takes `Term` (not `Var`), and the atomic case has historically been handled separately. In practice, `cut_pos_atom` subsumes both `Var` and `Body` cases for atoms.
+`From<Var<'s, N>> for Coterm<'s, N>` auto-wraps variables, so callers with a `Var` can pass it directly. Callers with a pre-constructed `Coterm::Body(cont)` pass it explicitly.
 
 ---
 
@@ -119,7 +121,7 @@ This is a thin wrapper over the same pattern as `cut_pos_var`, but specialized t
 - `From<Var<'s, A>> for Term<'s, A>` compiled without issues.
 - `Tensor::Intro<'s> = (Term<'s, A>, Term<'s, B>)` worked cleanly.
 - All binder types updated to use `Term`/`Coterm` without lifetime issues.
-- The generic `cut_pos_var` compiled on the first attempt.
+- The generic `cut_pos` compiled on the first attempt.
 
 ### What required adjustment
 
@@ -147,28 +149,28 @@ Every well-typed cut configuration in MALL-plus-exponentials:
 |---|---|---|---|---|
 | 1. Axiom | `Var<'s, A>` | `Var<'s, A::Dual>` | `cut` (stuck — normal form) | ✅ |
 | 2. Atomic principal | `Term::Var(x)` | `MuNeg<AtomN<X>>` | `cut_atom` | ✅ |
-| 3. Atomic positive | `MuPos<AtomP<X>>` | `Coterm::Var(z)` | `cut_pos_atom` | ✅ |
-| 4. Atomic commuting | `MuPos<AtomP<X>>` | `Coterm::Body(cont)` | `cut_pos_atom` | ✅ |
+| 3. Atomic positive | `MuPos<AtomP<X>>` | `Var<'s, AtomN<X>>` | `cut_pos` | ✅ |
+| 4. Atomic commuting | `MuPos<AtomP<X>>` | `Coterm::Body(cont)` | `cut_pos` | ✅ |
 | 5. Unit principal | `Term::Intro(())` | `MuUnit` | `cut_unit` | ✅ |
 | 6. Unit commuting | `MuPos<One>` | `MuUnit` | `cut_pos_unit` | ✅ |
-| 7. Unit positive-var | `MuPos<One>` | `Var<'s, Bot>` | `cut_pos_var` | ✅ |
+| 7. Unit positive-var | `MuPos<One>` | `Var<'s, Bot>` | `cut_pos` | ✅ |
 | 8. Tensor-par principal | `Term::Intro((a, b))` | `MuPar<A, B>` | `cut_par` | ✅ |
 | 9. Tensor-par commuting | `MuPos<Tensor<A, B>>` | `MuPar<A, B>` | `cut_pos_par` | ✅ |
-| 10. Tensor-par positive-var | `MuPos<Tensor<A, B>>` | `Var<'s, Par<A::Dual, B::Dual>>` | `cut_pos_var` | ✅ |
+| 10. Tensor-par positive-var | `MuPos<Tensor<A, B>>` | `Var<'s, Par<A::Dual, B::Dual>>` | `cut_pos` | ✅ |
 | 11. Plus-with principal | `Term::Intro(Inl/Inr)` | `MuCase<A, B>` | `cut_plus` | ✅ |
 | 12. Plus-with commuting | `MuPos<Plus<A, B>>` | `MuCase<A, B>` | `cut_pos_plus` | ✅ |
-| 13. Plus-with positive-var | `MuPos<Plus<A, B>>` | `Var<'s, With<A::Dual, B::Dual>>` | `cut_pos_var` | ✅ |
+| 13. Plus-with positive-var | `MuPos<Plus<A, B>>` | `Var<'s, With<A::Dual, B::Dual>>` | `cut_pos` | ✅ |
 | 14. Bang-whynot principal | `Term::Intro(BangIntro)` | `MuBang<A>` | `cut_bang` | ✅ |
 | 15. Bang-whynot commuting | `MuPos<Bang<A>>` | `MuBang<A>` | `cut_pos_bang` | ✅ |
-| 16. Bang-whynot positive-var | `MuPos<Bang<A>>` | `Var<'s, Whynot<A::Dual>>` | `cut_pos_var` | ✅ |
+| 16. Bang-whynot positive-var | `MuPos<Bang<A>>` | `Var<'s, Whynot<A::Dual>>` | `cut_pos` | ✅ |
 | 17. Generic stuck | `impl Expr<'s, A>` | `impl CoExpr<'s, A::Dual>` | `cut` (stuck) | ✅ |
 | 18. Principal-var (non-atomic) | `Term::Var(_)` | `MuPar`/`MuCase`/`MuBang`/`MuUnit` | Stuck — no rule | ✅ (uninhabited by typing) |
-| 19. Intro-var (positive) | `Term::Intro(_)` | `Var<'s, N>` | Stuck — no rule | ✅ (handled by `cut_pos_var` when wrapped in `MuPos`) |
+| 19. Intro-var (positive) | `Term::Intro(_)` | `Var<'s, N>` | Stuck — no rule | ✅ (handled by `cut_pos` when wrapped in `MuPos`) |
 | 20. Var-intro (negative) | `Var<'s, A>` | `Coterm::Body(cont)` | `cont(Term::Var(var))` via `cut_atom`/`cut_par`/etc. | ✅ |
 
 Rows 18-20 describe configurations that are either uninhabited by typing (you can't have a variable of tensor type as a raw `Term::Var` cut against a principal destructor without an enclosing binder) or are handled by the generic/uniform pattern.
 
-Every configuration the sequent calculus identifies as well-typed and reducible now has a corresponding function in the library. The uniform `Term`/`Coterm` representation made this possible: rows 7, 10, 13, 16 (MuPos-vs-Var for non-atomic types) are all handled by a single generic function, and row 4 (atomic commuting conversion) is a natural case of `cut_pos_atom` because `Coterm` has both variants uniformly.
+Every configuration the sequent calculus identifies as well-typed and reducible now has a corresponding function in the library. The uniform `Term`/`Coterm` representation made this possible: rows 3, 4, 7, 10, 13, 16 are all handled by the single generic `cut_pos` function because `Coterm` has both `Var` and `Body` variants uniformly.
 
 ---
 
@@ -179,17 +181,17 @@ Every configuration the sequent calculus identifies as well-typed and reducible 
 | `types.rs` | 233 | 214 | −19 |
 | `binder.rs` | 242 | 249 | +7 |
 | `expr.rs` | 44 | 48 | +4 |
-| `reduce.rs` | 229 | 267 | +38 |
+| `reduce.rs` | 229 | 252 | +23 |
 | `lib.rs` (tests) | 637 | 730 | +93 |
 | `machine.rs` | 70 | 70 | 0 |
 | `var.rs` | 32 | 32 | 0 |
 | `example.rs` | 208 | 211 | +3 |
-| **Library total** | **1457** | **1610** | **+153** |
+| **Library total** | **1457** | **1603** | **+146** |
 
 The library grew by ~153 lines. The delta is composed of:
 - ~30 lines: `Term`/`Coterm` enums + `From<Var>` + `Intro`/`Body` associated types
 - ~20 lines: `PlusIntro`, `WithBody`, `BangIntro` renames/definitions
-- ~38 lines: generic `cut_pos_var` + atomic commuting conversion logic in `cut_pos_atom`
+- ~23 lines: generic `cut_pos` replacing both `cut_pos_atom` and `cut_pos_var`
 - ~5 lines: explicit box-coercion patterns in commuting conversion cuts
 - ~93 lines: 5 new tests + test adaptations for `Term`/`Coterm` wrapping
 

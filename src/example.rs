@@ -154,7 +154,7 @@ fn example_positive_atomic_cut() {
         Coterm::Var(v) => cut(x, v),
         Coterm::Body(cont) => cont(x),
     });
-    let cmd = cut_pos_atom(binder, Coterm::Var(z));
+    let cmd = cut_pos(binder, z);
 
     let _outcome = run(cmd); // Stuck(StaticOnly) — normal form ⟨x | z⟩
 }

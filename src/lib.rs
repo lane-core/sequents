@@ -415,7 +415,7 @@ mod tests {
     }
 
     /// **Extension 1**: Positive atomic cut reduces.
-    /// `cut_pos_atom(μ⁺α.⟨x | α⟩, z)` should step to `⟨x | z⟩`.
+    /// `cut_pos(μ⁺α.⟨x | α⟩, z)` should step to `⟨x | z⟩`.
     #[test]
     fn extension_1_positive_atomic_cut() {
         let x: Var<'static, AtomP<X>> = Var::new();
@@ -425,7 +425,7 @@ mod tests {
             Coterm::Var(v) => cut(x, v),
             Coterm::Body(cont) => cont(Term::Var(x)),
         });
-        let cmd = cut_pos_atom(binder, Coterm::Var(z));
+        let cmd = cut_pos(binder, z);
 
         let outcome = run(cmd);
         assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
@@ -640,7 +640,7 @@ mod tests {
                 Term::Intro(i) => match i {},
             });
         let coterm: Coterm<'static, AtomN<X>> = Coterm::Body(body);
-        let cmd = cut_pos_atom(pos, coterm);
+        let cmd = cut_pos(pos, coterm);
 
         let outcome = run(cmd);
         assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
@@ -661,7 +661,7 @@ mod tests {
             Coterm::Body(_) => Command::stuck(StuckReason::Unexpected("body branch".into())),
         });
 
-        let cmd = cut_pos_var(pos, x);
+        let cmd = cut_pos(pos, x);
         let outcome = run(cmd);
         assert!(marker.get());
         assert!(matches!(
@@ -682,7 +682,7 @@ mod tests {
             },
         );
 
-        let cmd = cut_pos_var(pos, x);
+        let cmd = cut_pos(pos, x);
         let outcome = run(cmd);
         assert!(matches!(
             outcome,
@@ -702,7 +702,7 @@ mod tests {
             },
         );
 
-        let cmd = cut_pos_var(pos, x);
+        let cmd = cut_pos(pos, x);
         let outcome = run(cmd);
         assert!(matches!(
             outcome,
@@ -720,7 +720,7 @@ mod tests {
             Coterm::Body(_) => Command::stuck(StuckReason::Unexpected("body branch".into())),
         });
 
-        let cmd = cut_pos_var(pos, x);
+        let cmd = cut_pos(pos, x);
         let outcome = run(cmd);
         assert!(matches!(
             outcome,
