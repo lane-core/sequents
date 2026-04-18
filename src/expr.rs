@@ -1,4 +1,4 @@
-use crate::types::{Bang, BangValue, Neg, One, Plus, PlusValue, Pos, Tensor};
+use crate::types::{Bang, BangIntro, Neg, One, Plus, PlusIntro, Pos, Tensor, Term};
 
 /// A positive expression `⊢ t : A | Γ` at scope `'s`.
 ///
@@ -6,7 +6,7 @@ use crate::types::{Bang, BangValue, Neg, One, Plus, PlusValue, Pos, Tensor};
 /// positive expression of type `A` at scope `'s`.
 pub trait Expr<'s, A: Pos> {}
 
-/// A negative co-expression (value of negative type) at scope `'s`.
+/// A negative co-expression (coterm of negative type) at scope `'s`.
 ///
 /// `CoExpr` is a marker trait: any type implementing it is a well-formed
 /// negative co-expression of type `N` at scope `'s`.
@@ -17,28 +17,32 @@ pub trait CoExpr<'s, N: Neg> {}
 impl<'s, A: Pos> Expr<'s, A> for crate::var::Var<'s, A> {}
 impl<'s, N: Neg> CoExpr<'s, N> for crate::var::Var<'s, N> {}
 
+// -- Terms and coterms are expressions ---------------------------------------
+
+impl<'s, A: Pos> Expr<'s, A> for Term<'s, A> {}
+
 // -- Unit value is an expression ---------------------------------------------
 
 impl<'s> Expr<'s, One> for () {}
 
 // -- Tensor value (pair) is an expression ------------------------------------
 
-impl<'s, A: Pos, B: Pos> Expr<'s, Tensor<A, B>> for (A::Value<'s>, B::Value<'s>)
+impl<'s, A: Pos, B: Pos> Expr<'s, Tensor<A, B>> for (Term<'s, A>, Term<'s, B>)
 where
     A::Dual: Neg,
     B::Dual: Neg,
 {
 }
 
-// -- PlusValue implements Expr ------------------------------------------------
+// -- PlusIntro implements Expr ------------------------------------------------
 
-impl<'s, A: Pos, B: Pos> Expr<'s, Plus<A, B>> for PlusValue<'s, A, B>
+impl<'s, A: Pos, B: Pos> Expr<'s, Plus<A, B>> for PlusIntro<'s, A, B>
 where
     A::Dual: Neg,
     B::Dual: Neg,
 {
 }
 
-// -- BangValue implements Expr -----------------------------------------------
+// -- BangIntro implements Expr -----------------------------------------------
 
-impl<'s, A: Pos> Expr<'s, Bang<A>> for BangValue<'s, A> where A::Dual: Neg {}
+impl<'s, A: Pos> Expr<'s, Bang<A>> for BangIntro<'s, A> where A::Dual: Neg {}

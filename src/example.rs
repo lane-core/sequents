@@ -21,7 +21,7 @@ fn example_atomic_axiom() {
 
 fn example_mu_neg() {
     let a: Var<'static, AtomN<X>> = Var::new();
-    let _co = mu_neg::<'static, AtomN<X>, _>(|y: Var<'_, AtomP<X>>| cut(y, a));
+    let _co = mu_neg::<'static, AtomN<X>, _>(|y: Term<'_, AtomP<X>>| cut(y, a));
 }
 
 fn example_tensor() {
@@ -47,21 +47,21 @@ fn example_nested_binders() {
     let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
         cut(
             x,
-            mu_neg::<'_, AtomN<X>, _>(|_z: Var<'_, AtomP<X>>| cut(y, _w)),
+            mu_neg::<'_, AtomN<X>, _>(|_z: Term<'_, AtomP<X>>| cut(y, _w)),
         )
     });
 }
 
 fn example_unit_and_bottom() {
     let u = unit();
-    let _expr = u; // () implements Expr<'s, One>
+    let _expr = u; // Term<'s, One>
     let _bot = mu_unit(|| Command::stuck(StuckReason::StaticOnly));
 }
 
 fn example_tensor_par_cut() {
     let x: Var<'static, AtomP<X>> = Var::new();
     let y: Var<'static, AtomP<Y>> = Var::new();
-    let pair = (x, y);
+    let pair = tensor(x, y);
 
     let co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|a, b| {
         let m: Var<'_, AtomN<X>> = Var::new();
@@ -71,7 +71,7 @@ fn example_tensor_par_cut() {
         cut(b, n)
     });
 
-    let _cmd: Command<'static> = cut(pair, co);
+    let _cmd: Command<'static> = cut_par(pair, co);
 }
 
 // ============================================================================
@@ -82,8 +82,8 @@ fn example_atomic_reduction() {
     let x: Var<'static, AtomP<X>> = Var::new();
     let z: Var<'static, AtomN<X>> = Var::new();
 
-    let binder = mu_neg::<'static, AtomN<X>, _>(|y: Var<'_, AtomP<X>>| cut(y, z));
-    let cmd = cut_atom(x, binder);
+    let binder = mu_neg::<'static, AtomN<X>, _>(|y: Term<'_, AtomP<X>>| cut(y, z));
+    let cmd = cut_atom(Term::Var(x), binder);
 
     // After running, we get Stuck(StaticOnly) — the normal form ⟨x | z⟩.
     let _outcome = run(cmd);
@@ -91,7 +91,7 @@ fn example_atomic_reduction() {
 
 fn example_unit_reduction() {
     let binder = mu_unit(|| Command::stuck(StuckReason::Unexpected("done".into())));
-    let cmd = cut_unit((), binder);
+    let cmd = cut_unit(unit(), binder);
 
     let _outcome = run(cmd);
 }
@@ -107,7 +107,7 @@ fn example_composite_reduction() {
     let c: Var<'static, AtomP<C>> = Var::new();
     let d: Var<'static, AtomP<D>> = Var::new();
 
-    let pair = ((a, b), (c, d));
+    let pair = tensor(tensor(a, b), tensor(c, d));
 
     let binder =
         mu_par::<'static, Tensor<AtomP<A>, AtomP<B>>, Tensor<AtomP<C>, AtomP<D>>, _>(|x, y| {
@@ -133,7 +133,7 @@ fn example_multi_step() {
     let w: Var<'static, AtomN<X>> = Var::new();
 
     let cmd = cut_atom(
-        x,
+        Term::Var(x),
         mu_neg::<'static, AtomN<X>, _>(|y| cut_atom(y, mu_neg::<'_, AtomN<X>, _>(|z| cut(z, w)))),
     );
 
@@ -150,8 +150,11 @@ fn example_positive_atomic_cut() {
     let z: Var<'static, AtomN<X>> = Var::new();
 
     // μ⁺α.⟨x | α⟩  cut against  z
-    let binder = mu_pos::<'static, AtomP<X>, _>(|a: Var<'_, AtomN<X>>| cut(x, a));
-    let cmd = cut_pos_atom(binder, z);
+    let binder = mu_pos::<'static, AtomP<X>, _>(|a: Coterm<'_, AtomN<X>>| match a {
+        Coterm::Var(v) => cut(x, v),
+        Coterm::Body(cont) => cont(x),
+    });
+    let cmd = cut_pos_atom(binder, Coterm::Var(z));
 
     let _outcome = run(cmd); // Stuck(StaticOnly) — normal form ⟨x | z⟩
 }
@@ -165,7 +168,7 @@ fn example_additive_left() {
     let m: Var<'static, AtomN<X>> = Var::new();
     let n: Var<'static, AtomN<Y>> = Var::new();
 
-    let val = PlusValue::<'static, AtomP<X>, AtomP<Y>>::Inl(x);
+    let val = Term::Intro(PlusIntro::<'static, AtomP<X>, AtomP<Y>>::Inl(Term::Var(x)));
     let binder = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
         |a| cut_atom(a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
         |_b| cut_atom(_b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n))),
@@ -180,7 +183,7 @@ fn example_additive_right() {
     let m: Var<'static, AtomN<X>> = Var::new();
     let n: Var<'static, AtomN<Y>> = Var::new();
 
-    let val = PlusValue::<'static, AtomP<X>, AtomP<Y>>::Inr(y);
+    let val = Term::Intro(PlusIntro::<'static, AtomP<X>, AtomP<Y>>::Inr(Term::Var(y)));
     let binder = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
         |_a| cut_atom(_a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
         |b| cut_atom(b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n))),
