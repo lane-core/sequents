@@ -158,7 +158,62 @@ where
 }
 
 // =============================================================================
-// 6.  Variables — linear tokens
+// 6.  Exponential connectives
+// =============================================================================
+
+/// Positive exponential `!A` — duplicable values.
+///
+/// `Bang<A>` is a positive type whose values can be cloned and discarded.
+/// The underlying value is produced on demand via a closure, so each use
+/// obtains a fresh linear value.
+pub struct Bang<A: Pos>(PhantomData<A>);
+
+/// Negative exponential `?A` — dual of `!A`.
+pub struct Whynot<N: Neg>(PhantomData<N>);
+
+/// The value of `!A` at scope `'s`: a duplicable producer of `A::Value<'s>`.
+///
+/// Each invocation of the producer yields a fresh linear value.  The `Rc`
+/// wrapper provides `Clone` at zero additional cost beyond the reference
+/// count increment.
+pub struct BangValue<'s, A: Pos> {
+    producer: std::rc::Rc<dyn Fn() -> A::Value<'s> + 's>,
+    _marker: PhantomData<&'s ()>,
+}
+
+impl<'s, A: Pos> Clone for BangValue<'s, A> {
+    fn clone(&self) -> Self {
+        BangValue {
+            producer: self.producer.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<A: Pos> Pos for Bang<A>
+where
+    A::Dual: Neg,
+{
+    type Dual = Whynot<A::Dual>;
+    type Value<'s> = BangValue<'s, A>;
+}
+
+impl<N: Neg> Neg for Whynot<N>
+where
+    N::Dual: Pos,
+{
+    type Dual = Bang<N::Dual>;
+    /// `Whynot` has no user-constructible co-value form; introduction is only
+    /// via the `μ!x` binder.
+    type CoValue<'s> = std::convert::Infallible;
+}
+
+// -- BangValue implements Expr ------------------------------------------------
+
+impl<'s, A: Pos> Expr<'s, Bang<A>> for BangValue<'s, A> where A::Dual: Neg {}
+
+// =============================================================================
+// 7.  Variables — linear tokens
 // =============================================================================
 
 /// A variable (or covariable) token.
@@ -279,6 +334,17 @@ pub struct MuCase<'s, A: Pos, B: Pos, F1, F2> {
     _types: PhantomData<(A, B)>,
 }
 
+/// Exponential destructor `μ!x.c` at scope `'s`.
+///
+/// The body receives a `BangValue<'s, A>` — a duplicable producer of
+/// `A::Value<'s>`.  The body may clone the producer any number of times
+/// (zero, one, many), or drop it without use.
+pub struct MuBang<'s, A: Pos, F> {
+    pub body: F,
+    _marker: PhantomData<&'s ()>,
+    _type: PhantomData<A>,
+}
+
 // =============================================================================
 // 8.  Binder trait implementations
 // =============================================================================
@@ -313,6 +379,13 @@ where
     B::Dual: Neg,
     F1: FnOnce(A::Value<'s>) -> Command<'s>,
     F2: FnOnce(B::Value<'s>) -> Command<'s>,
+{
+}
+
+impl<'s, A: Pos, F> CoExpr<'s, Whynot<A::Dual>> for MuBang<'s, A, F>
+where
+    A::Dual: Neg,
+    F: FnOnce(BangValue<'s, A>) -> Command<'s>,
 {
 }
 
@@ -480,6 +553,46 @@ where
     }
 }
 
+/// Exponential destructor: `μ!x.c`.
+pub fn mu_bang<'s, A: Pos, F>(body: F) -> MuBang<'s, A, F>
+where
+    A::Dual: Neg,
+    F: FnOnce(BangValue<'s, A>) -> Command<'s>,
+{
+    MuBang {
+        body,
+        _marker: PhantomData,
+        _type: PhantomData,
+    }
+}
+
+/// Promote a closed computation to a classical (duplicable) value.
+///
+/// Takes a producer closure `Fn() -> A::Value<'s>` that can be invoked any
+/// number of times, each time yielding a fresh linear value.  The producer
+/// must be closed (no free linear variables) — this is enforced by Rust's
+/// move semantics on the closure.
+pub fn promote<'s, A: Pos, F>(producer: F) -> BangValue<'s, A>
+where
+    A::Dual: Neg,
+    F: Fn() -> A::Value<'s> + 's,
+{
+    BangValue {
+        producer: std::rc::Rc::new(producer),
+        _marker: PhantomData,
+    }
+}
+
+/// Derelict: extract a linear value from a classical producer.
+///
+/// Invokes the producer once, yielding a fresh `A::Value<'s>`.
+pub fn derelict<'s, A: Pos>(v: BangValue<'s, A>) -> A::Value<'s>
+where
+    A::Dual: Neg,
+{
+    (v.producer)()
+}
+
 // =============================================================================
 // 11. Reduction step functions (specific cuts)
 // =============================================================================
@@ -595,6 +708,22 @@ where
             PlusValue::Inl(a) => Outcome::Step((binder.body_left)(a)),
             PlusValue::Inr(b) => Outcome::Step((binder.body_right)(b)),
         }),
+    }
+}
+
+/// Exponential cut: `⟨!V | μ!x.c⟩`.
+///
+/// Reduction rule: invoke the binder body with the `BangValue`.  The body
+/// may clone the producer (duplication), drop it (weakening), or use it
+/// exactly once — all are permitted for classical values.
+pub fn cut_bang<'s, A: Pos, F>(v: BangValue<'s, A>, binder: MuBang<'s, A, F>) -> Command<'s>
+where
+    A::Dual: Neg,
+    F: FnOnce(BangValue<'s, A>) -> Command<'s> + 's,
+{
+    let body = binder.body;
+    Command {
+        step: Box::new(move || Outcome::Step(body(v))),
     }
 }
 
@@ -931,5 +1060,112 @@ mod tests {
         let cmd = cut_plus(val, binder);
         let outcome = run(cmd);
         assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
+    }
+
+    // =============================================================================
+    // Extension 3: Exponential connectives
+    // =============================================================================
+
+    /// Milestone 1: `Bang` and `Whynot` types compile with correct duality.
+    #[test]
+    fn exponential_duality() {
+        fn check<P: Pos>() {}
+        check::<Bang<AtomP<X>>>();
+        fn check_neg<N: Neg>() {}
+        check_neg::<Whynot<AtomN<X>>>();
+    }
+
+    /// Milestone 2: `BangValue` is `Clone`.
+    #[test]
+    fn exponential_bang_value_clone() {
+        let bang = promote::<'static, AtomP<X>, _>(|| Var::new());
+        let _clone = bang.clone();
+    }
+
+    /// Milestone 3: Promotion produces a `BangValue`.
+    #[test]
+    fn exponential_promote() {
+        let bang: BangValue<'static, AtomP<X>> = promote(|| Var::new());
+        let _ = bang;
+    }
+
+    /// Milestone 4: Dereliction extracts a fresh linear value.
+    #[test]
+    fn exponential_derelict() {
+        let bang: BangValue<'static, AtomP<X>> = promote(|| Var::new());
+        let _v1: Var<'static, AtomP<X>> = derelict(bang.clone());
+        let _v2: Var<'static, AtomP<X>> = derelict(bang);
+        // v1 and v2 are distinct variables (different values)
+    }
+
+    /// Milestone 5: Exponential cut — body receives BangValue and can use
+    /// it zero times (weakening), one time, or multiple times (contraction).
+    #[test]
+    fn exponential_cut_weakening() {
+        let bang = promote::<'static, AtomP<X>, _>(|| Var::new());
+        let binder = mu_bang::<'static, AtomP<X>, _>(|_b: BangValue<'_, AtomP<X>>| {
+            Command::stuck(StuckReason::Unexpected("weakened".into()))
+        });
+        let cmd = cut_bang(bang, binder);
+        let outcome = run(cmd);
+        assert!(matches!(
+            outcome,
+            Outcome::Stuck(StuckReason::Unexpected(_))
+        ));
+    }
+
+    #[test]
+    fn exponential_cut_single_use() {
+        let z: Var<'static, AtomN<X>> = Var::new();
+        let bang = promote::<'static, AtomP<X>, _>(|| Var::new());
+        let binder = mu_bang::<'static, AtomP<X>, _>(|b: BangValue<'_, AtomP<X>>| {
+            let v = derelict(b);
+            cut(v, z)
+        });
+        let cmd = cut_bang(bang, binder);
+        let _outcome = run(cmd);
+    }
+
+    #[test]
+    fn exponential_cut_contraction() {
+        let z1: Var<'static, AtomN<X>> = Var::new();
+        let z2: Var<'static, AtomN<X>> = Var::new();
+        let bang = promote::<'static, AtomP<X>, _>(|| Var::new());
+        let binder = mu_bang::<'static, AtomP<X>, _>(|b: BangValue<'_, AtomP<X>>| {
+            let v1 = derelict(b.clone());
+            let v2 = derelict(b);
+            let cmd1 = cut(v1, z1);
+            let _ = cmd1;
+            cut(v2, z2)
+        });
+        let cmd = cut_bang(bang, binder);
+        let _outcome = run(cmd);
+    }
+
+    /// Milestone 6: Composite classical types.
+    /// `Bang<Tensor<AtomP<X>, AtomP<Y>>>` produces pairs on demand.
+    #[test]
+    fn exponential_composite() {
+        let z: Var<'static, AtomN<X>> = Var::new();
+        let w: Var<'static, AtomN<Y>> = Var::new();
+
+        let bang = promote::<'static, Tensor<AtomP<X>, AtomP<Y>>, _>(|| (Var::new(), Var::new()));
+
+        let binder = mu_bang::<'static, Tensor<AtomP<X>, AtomP<Y>>, _>(
+            |b: BangValue<'_, Tensor<AtomP<X>, AtomP<Y>>>| {
+                let pair = derelict(b);
+                cut_par(
+                    pair,
+                    mu_par::<'_, AtomP<X>, AtomP<Y>, _>(|a, b_val| {
+                        let cmd1 = cut(a, z);
+                        let _ = cmd1;
+                        cut(b_val, w)
+                    }),
+                )
+            },
+        );
+
+        let cmd = cut_bang(bang, binder);
+        let _outcome = run(cmd);
     }
 }
