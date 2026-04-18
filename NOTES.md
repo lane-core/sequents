@@ -109,23 +109,76 @@ because:
 - The closure body returns `Command<'s>` where `'s` matches the outer scope
 - No `'static` bound prevents the capture
 
-### The lifetime design decision
+### The lifetime design decision (and the HRTB question)
 
 The first pass used `for<'x> FnOnce(Var<'x, A>) -> Command<'x>` for binder
-bodies.  This makes the closure polymorphic in `'x`, which prevents it from
-capturing variables with specific lifetimes.  The intuition was that `for<'x>`
-gives freshness for free.
+bodies.  The architectural thesis claimed that `for<'x>` gives α-equivalence
+and freshness for free — each binder introduces a genuinely fresh, universally-
+quantified lifetime.
 
-Option A uses specific lifetimes: `FnOnce(Var<'s, A>) -> Command<'s>`.  The
-binder is scoped at `'s`, and the body can capture anything valid at `'s`.
-Freshness is still guaranteed because each binder introduces its variables as
-closure parameters — distinct values, scoped to the closure body.  The lifetime
-`'s` is a scope marker, not an identity marker.  Multiple variables at the same
-scope are distinguished by being different values (linearity enforces this).
+Option A dropped `for<'x>` in favor of specific lifetimes:
+`FnOnce(Var<'s, A>) -> Command<'s>`.  This enables capture but weakens the
+type-level freshness guarantee.  The question was whether `for<'x>` could be
+preserved alongside capture by separating the binder's outer lifetime from the
+variable's inner lifetime.
 
-**Trade-off**: top-level closed terms no longer get `for<'x>` polymorphism
-automatically.  Users write `mu_neg::<'static, AtomN<X>, _>(|x| ...)` for
-closed terms.  This is slightly more verbose but enables nesting.
+**Investigation result: HRTB + non-`'static` capture is incompatible.**
+
+Tested the proposed signature:
+
+```rust
+pub fn mu_neg_hrtb<'outer, F>(body: F) -> Command<'outer>
+where
+    F: for<'x> FnOnce(Var<'x, ()>) -> Command<'x> + 'outer,
+```
+
+Against a nested binder capturing a non-`'static` `Var`:
+
+```rust
+fn inner<'a>(outer: Var<'a, ()>) {
+    let _cmd = mu_neg_hrtb(|inner: Var<'_, ()>| {
+        cut(inner, outer)  // requires 'a: 'x for all 'x
+    });
+}
+```
+
+**Error:** `lifetime may not live long enough — returning this value requires that 'a must outlive 'static`
+
+The `for<'x>` quantifier is universal over **all** lifetimes, including
+`'static`. When the body captures `outer: Var<'a, ()>` and uses it where
+`Var<'x, ()>` is expected, Rust needs `'a: 'x` for all `'x`. Since `'x`
+includes `'static`, this requires `'a: 'static`. But `'a` is a generic lifetime
+parameter — it does not necessarily outlive `'static`.
+
+**This is a fundamental limit, not a workaround gap.** The first pass's
+`+ 'static` bound was not an over-constraint — it was the **necessary
+consequence** of combining HRTB with capture of lifetime-carrying data. You
+cannot have both universal lifetime freshness and non-`'static` capture of
+`Var` in Rust's type system.
+
+**The current design correctly chooses capture over HRTB.** Freshness is still
+guaranteed by value identity (each binder introduces a distinct `Var` value),
+which is enforced by move semantics. The lifetime `'s` is a scope marker, not
+an identity marker. Two binders at the same scope produce variables with the
+same lifetime type but distinct values — this is α-equivalence, and it is
+semantically correct.
+
+**Soundness check:** Can the specific-lifetime signature admit confused code?
+Tested multiple attack vectors:
+- Double use (`cut(x, x)`) — rejected by move semantics
+- Cross-binder reuse (same `Var` in two binder bodies) — rejected by move semantics
+- Parameter swap (using outer binder's variable where inner's is expected) —
+  compiles, but is semantically valid (α-equivalence)
+- Escape via Vec/RefCell — possible in principle if closures are invoked, but
+  irrelevant to static well-formedness
+
+**Conclusion:** The weakening from HRTB to specific lifetime is **cosmetic,
+not semantic.** No ill-formed System L term can be constructed. Move semantics
+enforce linearity at the value level, which is the correct level of abstraction.
+
+**Trade-off:** Top-level closed terms need explicit `'static` annotation
+(`mu_neg::<'static, AtomN<X>, _>(...)`). This is slightly more verbose but
+enables nesting.
 
 ### What still has friction
 
@@ -175,10 +228,31 @@ The test suite validates:
 
 All 9 tests pass on stable Rust (2024 edition).
 
+## The strong vs weak form
+
+| Form | Claim | Status |
+|---|---|---|
+| **Strong** | Rust enforces all of System L's well-formedness, including type-level freshness via HRTB | **Unachievable** — HRTB + non-`'static` capture is incompatible |
+| **Weak** | Rust enforces scope safety and linearity; α-equivalence is maintained by value semantics | **Achieved** — the current library delivers this |
+
+The strong form was the original architectural bet. The investigation shows it
+fails not because of a missing workaround, but because of a fundamental tension
+in Rust's type system: universal quantification over lifetimes (`for<'x>`)
+requires captured lifetime-carrying data to outlive all quantified lifetimes,
+which forces `'static`.
+
+This is a **real finding** about Rust's type system. It says: Rust's lifetime
+system can carry scope structure and enforce linearity, but it cannot
+simultaneously provide universal freshness quantification and capture of
+non-`'static` scoped data. You must choose one. The library chooses capture
+(enabling nested binders) over HRTB freshness (which was cosmetic anyway,
+since freshness is already guaranteed by value identity).
+
 ## Path forward
 
-**Phase 1 is complete.** The trait-based surface API is clean, nested binders
-work, and the multiplicative fragment is fully expressible.
+**Phase 1 is complete and settled.** The HRTB question has been investigated
+and answered. The specific-lifetime design is sound, enables nested binders,
+and eliminates all enum-based workarounds.
 
 **Phase 2** (continuation-based commands, Option B from the memo) would layer
 operational semantics on top.  The idea is to make `Command<'s>` a closure that
