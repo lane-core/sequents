@@ -113,7 +113,52 @@ where
 }
 
 // =============================================================================
-// 5.  Variables — linear tokens
+// 5.  Additive connectives
+// =============================================================================
+
+/// Positive sum `A ⊕ B` (choice made at introduction time).
+pub struct Plus<A: Pos, B: Pos>(PhantomData<(A, B)>);
+
+/// Negative with `A & B` (choice made at destruction time).
+pub struct With<A: Neg, B: Neg>(PhantomData<(A, B)>);
+
+/// Value of a sum type: either left or right injection.
+pub enum PlusValue<'s, A: Pos, B: Pos> {
+    Inl(A::Value<'s>),
+    Inr(B::Value<'s>),
+}
+
+impl<A: Pos, B: Pos> Pos for Plus<A, B>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+{
+    type Dual = With<A::Dual, B::Dual>;
+    type Value<'s> = PlusValue<'s, A, B>;
+}
+
+impl<A: Neg, B: Neg> Neg for With<A, B>
+where
+    A::Dual: Pos,
+    B::Dual: Pos,
+{
+    type Dual = Plus<A::Dual, B::Dual>;
+    /// `With` has no user-constructible co-value form; introduction is only
+    /// via the `μcase` binder.
+    type CoValue<'s> = std::convert::Infallible;
+}
+
+// -- PlusValue implements Expr ------------------------------------------------
+
+impl<'s, A: Pos, B: Pos> Expr<'s, Plus<A, B>> for PlusValue<'s, A, B>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+{
+}
+
+// =============================================================================
+// 6.  Variables — linear tokens
 // =============================================================================
 
 /// A variable (or covariable) token.
@@ -223,6 +268,17 @@ pub struct MuPar<'s, A: Pos, B: Pos, F> {
     _types: PhantomData<(A, B)>,
 }
 
+/// Case destructor `μcase(x ⇒ c₁, y ⇒ c₂)` at scope `'s`.
+///
+/// The binder carries two bodies, one for each injection.  When cut against
+/// a `PlusValue`, the appropriate body is invoked with the injected value.
+pub struct MuCase<'s, A: Pos, B: Pos, F1, F2> {
+    pub body_left: F1,
+    pub body_right: F2,
+    _marker: PhantomData<&'s ()>,
+    _types: PhantomData<(A, B)>,
+}
+
 // =============================================================================
 // 8.  Binder trait implementations
 // =============================================================================
@@ -248,6 +304,15 @@ where
     A::Dual: Neg,
     B::Dual: Neg,
     F: FnOnce(A::Value<'s>, B::Value<'s>) -> Command<'s>,
+{
+}
+
+impl<'s, A: Pos, B: Pos, F1, F2> CoExpr<'s, With<A::Dual, B::Dual>> for MuCase<'s, A, B, F1, F2>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+    F1: FnOnce(A::Value<'s>) -> Command<'s>,
+    F2: FnOnce(B::Value<'s>) -> Command<'s>,
 {
 }
 
@@ -396,6 +461,25 @@ where
     }
 }
 
+/// Case destructor: `μcase(x ⇒ c₁, y ⇒ c₂)`.
+pub fn mu_case<'s, A: Pos, B: Pos, F1, F2>(
+    body_left: F1,
+    body_right: F2,
+) -> MuCase<'s, A, B, F1, F2>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+    F1: FnOnce(A::Value<'s>) -> Command<'s>,
+    F2: FnOnce(B::Value<'s>) -> Command<'s>,
+{
+    MuCase {
+        body_left,
+        body_right,
+        _marker: PhantomData,
+        _types: PhantomData,
+    }
+}
+
 // =============================================================================
 // 11. Reduction step functions (specific cuts)
 // =============================================================================
@@ -487,6 +571,30 @@ where
     let (a, b) = v;
     Command {
         step: Box::new(move || Outcome::Step(body(a, b))),
+    }
+}
+
+/// Additive cut: `⟨V | μcase(x ⇒ c₁, y ⇒ c₂)⟩`.
+///
+/// Reduction rule: inspect the injection and invoke the corresponding
+/// body with the injected value.  This is the first reduction in the
+/// library that performs runtime dispatch (the value's shape determines
+/// which branch runs).
+pub fn cut_plus<'s, A: Pos, B: Pos, F1, F2>(
+    v: PlusValue<'s, A, B>,
+    binder: MuCase<'s, A, B, F1, F2>,
+) -> Command<'s>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+    F1: FnOnce(A::Value<'s>) -> Command<'s> + 's,
+    F2: FnOnce(B::Value<'s>) -> Command<'s> + 's,
+{
+    Command {
+        step: Box::new(move || match v {
+            PlusValue::Inl(a) => Outcome::Step((binder.body_left)(a)),
+            PlusValue::Inr(b) => Outcome::Step((binder.body_right)(b)),
+        }),
     }
 }
 
@@ -772,6 +880,55 @@ mod tests {
             }),
         );
 
+        let outcome = run(cmd);
+        assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
+    }
+
+    // =============================================================================
+    // Extension 2: Additive connectives
+    // =============================================================================
+
+    /// Duality of additive connectives.
+    #[test]
+    fn additive_duality() {
+        fn check<P: Pos>() {}
+        check::<Plus<AtomP<X>, AtomP<Y>>>();
+        fn check_neg<N: Neg>() {}
+        check_neg::<With<AtomN<X>, AtomN<Y>>>();
+    }
+
+    /// `cut_plus` with left injection: should take the left branch.
+    #[test]
+    fn extension_2_plus_left() {
+        let x: Var<'static, AtomP<X>> = Var::new();
+        let m: Var<'static, AtomN<X>> = Var::new();
+        let n: Var<'static, AtomN<Y>> = Var::new();
+
+        let val = PlusValue::<'static, AtomP<X>, AtomP<Y>>::Inl(x);
+        let binder = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+            |a| cut_atom(a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
+            |_b| cut_atom(_b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n))),
+        );
+
+        let cmd = cut_plus(val, binder);
+        let outcome = run(cmd);
+        assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
+    }
+
+    /// `cut_plus` with right injection: should take the right branch.
+    #[test]
+    fn extension_2_plus_right() {
+        let y: Var<'static, AtomP<Y>> = Var::new();
+        let m: Var<'static, AtomN<X>> = Var::new();
+        let n: Var<'static, AtomN<Y>> = Var::new();
+
+        let val = PlusValue::<'static, AtomP<X>, AtomP<Y>>::Inr(y);
+        let binder = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+            |_a| cut_atom(_a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
+            |b| cut_atom(b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n))),
+        );
+
+        let cmd = cut_plus(val, binder);
         let outcome = run(cmd);
         assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
     }
