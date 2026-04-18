@@ -2,23 +2,38 @@
 //!
 //! A research prototype embedding the multiplicative fragment of linear System L
 //! into Rust's type system.  Scope structure is carried by lifetimes; linearity
-//! is enforced by move semantics; binders use higher-rank lifetime
-//! quantification (`for<'x>`).
+//! is enforced by move semantics.
+//!
+//! This is **Option A** from the design memo: `Expr` and `CoExpr` are traits,
+//! not enums.  Each introduction form is its own type, implementing the
+//! appropriate trait.  There is no `Box<dyn Any>`, no custom binder traits, and
+//! no `+ 'static` bounds on closures.
 
-use std::any::Any;
 use std::marker::PhantomData;
 
 // =============================================================================
 // 1.  Polarity traits
 // =============================================================================
 
+/// Positive types: atoms `X`, unit `1`, tensor `A ⊗ B`.
+///
+/// `Dual` computes the De Morgan dual (always in NNF).  `Value<'s>` is the
+/// type of introduction forms at scope `'s`.
 pub trait Pos: Sized + 'static {
+    /// The De Morgan dual — a negative type.
     type Dual: Neg<Dual = Self>;
+    /// The concrete introduction form at scope `'s`.
     type Value<'s>;
 }
 
+/// Negative types: dual atoms `X⊥`, unit `⊥`, par `A ⅋ B`.
+///
+/// `Dual` computes the De Morgan dual.  `CoValue<'s>` is the type of
+/// co-value forms at scope `'s`.
 pub trait Neg: Sized + 'static {
+    /// The De Morgan dual — a positive type.
     type Dual: Pos<Dual = Self>;
+    /// The concrete co-value form at scope `'s`.
     type CoValue<'s>;
 }
 
@@ -26,16 +41,21 @@ pub trait Neg: Sized + 'static {
 // 2.  Atoms
 // =============================================================================
 
+/// Positive atom `X`.
 pub struct AtomP<X>(PhantomData<X>);
+
+/// Negative atom `X⊥`.
 pub struct AtomN<X>(PhantomData<X>);
 
 impl<X: 'static> Pos for AtomP<X> {
     type Dual = AtomN<X>;
+    /// The variable token *is* the atomic value.
     type Value<'s> = Var<'s, AtomP<X>>;
 }
 
 impl<X: 'static> Neg for AtomN<X> {
     type Dual = AtomP<X>;
+    /// The covariable token *is* the atomic co-value.
     type CoValue<'s> = Var<'s, AtomN<X>>;
 }
 
@@ -43,7 +63,10 @@ impl<X: 'static> Neg for AtomN<X> {
 // 3.  Multiplicative units
 // =============================================================================
 
+/// Positive unit `1`.
 pub struct One;
+
+/// Negative unit `⊥`.
 pub struct Bot;
 
 impl Pos for One {
@@ -53,6 +76,7 @@ impl Pos for One {
 
 impl Neg for Bot {
     type Dual = One;
+    /// `Bot` has no user-constructible co-value form.
     type CoValue<'s> = std::convert::Infallible;
 }
 
@@ -60,7 +84,10 @@ impl Neg for Bot {
 // 4.  Multiplicative connectives
 // =============================================================================
 
+/// Tensor `A ⊗ B` (both components positive).
 pub struct Tensor<A: Pos, B: Pos>(PhantomData<(A, B)>);
+
+/// Par `A ⅋ B` (both components negative).
 pub struct Par<A: Neg, B: Neg>(PhantomData<(A, B)>);
 
 impl<A: Pos, B: Pos> Pos for Tensor<A, B>
@@ -69,6 +96,8 @@ where
     B::Dual: Neg,
 {
     type Dual = Par<A::Dual, B::Dual>;
+    /// Crucial line: the tensor value lives in the intersection of its
+    /// components' lifetimes, computed automatically by Rust's covariance.
     type Value<'s> = (A::Value<'s>, B::Value<'s>);
 }
 
@@ -78,6 +107,8 @@ where
     B::Dual: Pos,
 {
     type Dual = Tensor<A::Dual, B::Dual>;
+    /// `Par` has no user-constructible co-value form; introduction is only via
+    /// the `μ(x ⅋ y)` binder.
     type CoValue<'s> = std::convert::Infallible;
 }
 
@@ -85,14 +116,21 @@ where
 // 5.  Variables — linear tokens
 // =============================================================================
 
+/// A variable (or covariable) token.
+///
+/// * Non-`Copy`, non-`Clone` — using it twice is a compile error.
+/// * The lifetime `'x` is the scope in which this variable is valid.
+/// * `PhantomData<&'x ()>` makes `Var` **covariant** in `'x`.
 pub struct Var<'x, A> {
     _marker: PhantomData<&'x ()>,
     _type: PhantomData<A>,
 }
 
 impl<'x, A> Var<'x, A> {
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Self {
+    /// Create a fresh variable token.  In a real term, variables are
+    /// introduced by binders; this constructor is useful for building
+    /// open terms (e.g., the axiom rule) and for testing.
+    pub fn new() -> Self {
         Var {
             _marker: PhantomData,
             _type: PhantomData,
@@ -100,235 +138,218 @@ impl<'x, A> Var<'x, A> {
     }
 }
 
-// =============================================================================
-// 6.  Binder-body traits (stable-Rust workaround for FnOnce trait objects)
-// =============================================================================
-
-pub trait PosBinder<A: Pos> {
-    fn call<'x>(self: Box<Self>, x: Var<'x, A>) -> Command<'x>;
-}
-
-impl<A: Pos, F> PosBinder<A> for F
-where
-    F: for<'x> FnOnce(Var<'x, A>) -> Command<'x> + 'static,
-{
-    fn call<'x>(self: Box<Self>, x: Var<'x, A>) -> Command<'x> {
-        (*self)(x)
+impl<'x, A> Default for Var<'x, A> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-pub trait NegBinder<N: Neg> {
-    fn call<'x>(self: Box<Self>, x: Var<'x, N::Dual>) -> Command<'x>;
-}
-
-impl<N: Neg, F> NegBinder<N> for F
-where
-    F: for<'x> FnOnce(Var<'x, N::Dual>) -> Command<'x> + 'static,
-{
-    fn call<'x>(self: Box<Self>, x: Var<'x, N::Dual>) -> Command<'x> {
-        (*self)(x)
-    }
-}
-
-pub trait UnitBinder {
-    fn call(self: Box<Self>) -> Command<'static>;
-}
-
-impl<F> UnitBinder for F
-where
-    F: FnOnce() -> Command<'static> + 'static,
-{
-    fn call(self: Box<Self>) -> Command<'static> {
-        (*self)()
-    }
-}
-
-pub trait ParBinder<A: Pos, B: Pos> {
-    fn call<'x>(self: Box<Self>, x: Var<'x, A>, y: Var<'x, B>) -> Command<'x>;
-}
-
-impl<A: Pos, B: Pos, F> ParBinder<A, B> for F
-where
-    F: for<'x> FnOnce(Var<'x, A>, Var<'x, B>) -> Command<'x> + 'static,
-{
-    fn call<'x>(self: Box<Self>, x: Var<'x, A>, y: Var<'x, B>) -> Command<'x> {
-        (*self)(x, y)
-    }
-}
+// Explicitly NOT implementing Clone or Copy.
+// Move semantics enforce linearity.
 
 // =============================================================================
-// 7.  Expressions, co-expressions, and commands
+// 6.  Expression and co-expression traits (tagless-final style)
 // =============================================================================
 
 /// A positive expression `⊢ t : A | Γ` at scope `'s`.
-pub enum Expr<'s, A: Pos> {
-    Var(Var<'s, A>),
-    Val(A::Value<'s>),
-    MuPos(MuPos<A>),
-}
+///
+/// `Expr` is a marker trait: any type implementing it is a well-formed
+/// positive expression of type `A` at scope `'s`.
+pub trait Expr<'s, A: Pos> {}
 
 /// A negative co-expression (value of negative type) at scope `'s`.
-pub enum CoExpr<'s, N: Neg> {
-    CoVal(N::CoValue<'s>),
-    MuNeg(MuNeg<N>),
-    /// Only valid for `N = Bot`.
-    MuUnit(MuUnit),
-    /// Only valid for `N = Par<A, B>`. The `Any` boxing is needed because
-    /// `MuPar<A, B>` does not fit into the enum's type parameter `N`.
-    MuPar(Box<dyn Any>),
+///
+/// `CoExpr` is a marker trait: any type implementing it is a well-formed
+/// negative co-expression of type `N` at scope `'s`.
+pub trait CoExpr<'s, N: Neg> {}
+
+// -- Variables are expressions (axiom rule) ----------------------------------
+
+impl<'s, A: Pos> Expr<'s, A> for Var<'s, A> {}
+impl<'s, N: Neg> CoExpr<'s, N> for Var<'s, N> {}
+
+// -- Unit value is an expression ---------------------------------------------
+
+impl<'s> Expr<'s, One> for () {}
+
+// -- Tensor value (pair) is an expression ------------------------------------
+
+impl<'s, A: Pos, B: Pos> Expr<'s, Tensor<A, B>> for (A::Value<'s>, B::Value<'s>)
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+{
 }
 
-pub struct MuPos<A: Pos> {
+// =============================================================================
+// 7.  Binder types
+// =============================================================================
+
+/// Positive μ-binder `μx⁺.c` at scope `'s`.
+pub struct MuPos<'s, A: Pos, F> {
     #[allow(dead_code)]
-    body: Box<dyn PosBinder<A> + 'static>,
+    body: F,
+    _marker: PhantomData<&'s ()>,
+    _type: PhantomData<A>,
 }
 
-pub struct MuNeg<N: Neg> {
-    body: Box<dyn NegBinder<N> + 'static>,
-}
-
-pub struct MuUnit {
+/// Negative μ-binder `μx⁻.c` at scope `'s`.
+pub struct MuNeg<'s, N: Neg, F> {
     #[allow(dead_code)]
-    body: Box<dyn UnitBinder + 'static>,
+    body: F,
+    _marker: PhantomData<&'s ()>,
+    _type: PhantomData<N>,
 }
 
-pub struct MuPar<A: Pos, B: Pos> {
-    body: Box<dyn ParBinder<A, B> + 'static>,
+/// Bottom destructor `μ().c` at scope `'s`.
+pub struct MuUnit<'s, F> {
+    #[allow(dead_code)]
+    body: F,
+    _marker: PhantomData<&'s ()>,
 }
+
+/// Par destructor `μ(x ⅋ y).c` at scope `'s`.
+pub struct MuPar<'s, A: Pos, B: Pos, F> {
+    #[allow(dead_code)]
+    body: F,
+    _marker: PhantomData<&'s ()>,
+    _types: PhantomData<(A, B)>,
+}
+
+// =============================================================================
+// 8.  Binder trait implementations
+// =============================================================================
+
+impl<'s, A: Pos, F> Expr<'s, A> for MuPos<'s, A, F> where F: FnOnce(Var<'s, A>) -> Command<'s> {}
+
+impl<'s, N: Neg, F> CoExpr<'s, N> for MuNeg<'s, N, F> where
+    F: FnOnce(Var<'s, N::Dual>) -> Command<'s>
+{
+}
+
+impl<'s, F> CoExpr<'s, Bot> for MuUnit<'s, F> where F: FnOnce() -> Command<'s> {}
+
+impl<'s, A: Pos, B: Pos, F> CoExpr<'s, Par<A::Dual, B::Dual>> for MuPar<'s, A, B, F>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+    F: FnOnce(Var<'s, A>, Var<'s, B>) -> Command<'s>,
+{
+}
+
+// =============================================================================
+// 9.  Command
+// =============================================================================
 
 /// A command `c : (⊢ Γ)` at scope `'s`.
+///
+/// In Phase 1 this is a marker type (ZST).  Phase 2 may give it operational
+/// content (continuation-based reduction).
 pub struct Command<'s> {
     _marker: PhantomData<&'s ()>,
 }
 
 impl<'s> Command<'s> {
-    fn new() -> Self {
+    /// Construct a command.  In Phase 1 this is a no-op marker.
+    pub fn new() -> Self {
         Command {
             _marker: PhantomData,
         }
     }
 }
 
+impl<'s> Default for Command<'s> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // =============================================================================
-// 8.  Constructors
+// 10. Constructors
 // =============================================================================
 
-impl<'s, A: Pos> Expr<'s, A> {
-    pub fn var(v: Var<'s, A>) -> Self {
-        Expr::Var(v)
-    }
-    pub fn val(v: A::Value<'s>) -> Self {
-        Expr::Val(v)
-    }
-}
-
-impl<'s, N: Neg> CoExpr<'s, N> {
-    pub fn co_val(v: N::CoValue<'s>) -> Self {
-        CoExpr::CoVal(v)
-    }
-}
-
-impl<'s> CoExpr<'s, Bot> {
-    pub fn mu_unit(mu: MuUnit) -> Self {
-        CoExpr::MuUnit(mu)
-    }
-}
-
-impl<'s, A: Neg, B: Neg> CoExpr<'s, Par<A, B>>
+/// Positive μ-binder: `μx⁺.c`.
+///
+/// The binder is scoped at `'s` — the body receives a variable of type `A`
+/// valid at `'s` and must produce a command at `'s`.  This allows the body
+/// to capture variables from the ambient scope, enabling nested binders.
+pub fn mu_pos<'s, A: Pos, F>(body: F) -> impl Expr<'s, A>
 where
-    A::Dual: Pos,
-    B::Dual: Pos,
+    F: FnOnce(Var<'s, A>) -> Command<'s>,
 {
-    pub fn mu_par(mu: MuPar<A::Dual, B::Dual>) -> Self {
-        CoExpr::MuPar(Box::new(mu))
+    MuPos {
+        body,
+        _marker: PhantomData,
+        _type: PhantomData,
     }
 }
 
-pub fn cut<'s, A: Pos>(_t: Expr<'s, A>, _v: CoExpr<'s, A::Dual>) -> Command<'s>
+/// Negative μ-binder: `μx⁻.c`.
+pub fn mu_neg<'s, N: Neg, F>(body: F) -> impl CoExpr<'s, N>
 where
+    F: FnOnce(Var<'s, N::Dual>) -> Command<'s>,
+{
+    MuNeg {
+        body,
+        _marker: PhantomData,
+        _type: PhantomData,
+    }
+}
+
+/// Unit introduction: `()`.
+#[allow(clippy::unused_unit)]
+pub fn unit() -> () {
+    ()
+}
+
+/// Tensor introduction: `V ⊗ W`.
+pub fn tensor<'s, A: Pos, B: Pos>(v: A::Value<'s>, w: B::Value<'s>) -> impl Expr<'s, Tensor<A, B>>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+{
+    (v, w)
+}
+
+/// Bottom destructor: `μ().c`.
+pub fn mu_unit<'s, F>(body: F) -> impl CoExpr<'s, Bot>
+where
+    F: FnOnce() -> Command<'s>,
+{
+    MuUnit {
+        body,
+        _marker: PhantomData,
+    }
+}
+
+/// Par destructor: `μ(x ⅋ y).c`.
+pub fn mu_par<'s, A: Pos, B: Pos, F>(body: F) -> impl CoExpr<'s, Par<A::Dual, B::Dual>>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+    F: FnOnce(Var<'s, A>, Var<'s, B>) -> Command<'s>,
+{
+    MuPar {
+        body,
+        _marker: PhantomData,
+        _types: PhantomData,
+    }
+}
+
+/// Cut: `⟨t | V⟩`.
+///
+/// The type system ensures the two sides have dual types.
+pub fn cut<'s, A: Pos, T, E>(_t: T, _e: E) -> Command<'s>
+where
+    T: Expr<'s, A>,
+    E: CoExpr<'s, A::Dual>,
     A::Dual: Neg,
 {
     Command::new()
 }
 
-pub fn mu_pos<A: Pos, F>(body: F) -> Expr<'static, A>
-where
-    F: for<'x> FnOnce(Var<'x, A>) -> Command<'x> + 'static,
-{
-    Expr::MuPos(MuPos {
-        body: Box::new(body),
-    })
-}
-
-pub fn mu_neg<N: Neg, F>(body: F) -> CoExpr<'static, N>
-where
-    F: for<'x> FnOnce(Var<'x, N::Dual>) -> Command<'x> + 'static,
-{
-    CoExpr::MuNeg(MuNeg {
-        body: Box::new(body),
-    })
-}
-
-#[allow(clippy::unused_unit)]
-pub fn unit() -> <One as Pos>::Value<'static> {
-    ()
-}
-
-pub fn tensor<'s, A: Pos, B: Pos>(
-    v: A::Value<'s>,
-    w: B::Value<'s>,
-) -> (A::Value<'s>, B::Value<'s>) {
-    (v, w)
-}
-
-pub fn mu_unit<F>(body: F) -> CoExpr<'static, Bot>
-where
-    F: FnOnce() -> Command<'static> + 'static,
-{
-    CoExpr::mu_unit(MuUnit {
-        body: Box::new(body),
-    })
-}
-
-pub fn mu_par<A: Pos, B: Pos, F>(body: F) -> CoExpr<'static, Par<A::Dual, B::Dual>>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-    Par<A::Dual, B::Dual>: Neg,
-    F: for<'x> FnOnce(Var<'x, A>, Var<'x, B>) -> Command<'x> + 'static,
-{
-    CoExpr::mu_par(MuPar {
-        body: Box::new(body),
-    })
-}
-
 // =============================================================================
-// 9.  Reduction (atomic case)
-// =============================================================================
-
-/// Reduce `⟨x | μy⁻.c⟩` for atomic `X`.
-///
-///   `⟨x : X | μy⁻.c⟩ ▷ c[x/y]`
-pub fn reduce_mu_neg_atom<'s, X: 'static>(
-    x: Var<'s, AtomP<X>>,
-    body: MuNeg<AtomN<X>>,
-) -> Command<'s> {
-    body.body.call(x)
-}
-
-/// Reduce `⟨V ⊗ W | μ(x ⅋ y).c⟩` for atomic `X`, `Y`.
-///
-///   `⟨x ⊗ y | μ(a ⅋ b).c⟩ ▷ c[x/a, y/b]`
-pub fn reduce_tensor_par_atom<'s, X: 'static, Y: 'static>(
-    x: Var<'s, AtomP<X>>,
-    y: Var<'s, AtomP<Y>>,
-    body: MuPar<AtomP<X>, AtomP<Y>>,
-) -> Command<'s> {
-    body.body.call(x, y)
-}
-
-// =============================================================================
-// 10. Tests
+// 11. Tests
 // =============================================================================
 
 #[cfg(test)]
@@ -342,89 +363,98 @@ mod tests {
     fn atomic_axiom() {
         let x: Var<'static, AtomP<X>> = Var::new();
         let y: Var<'static, AtomN<X>> = Var::new();
-        let _cmd = cut(Expr::var(x), CoExpr::co_val(y));
+        let _cmd: Command<'static> = cut(x, y);
     }
 
     #[test]
-    fn mu_neg_binder() {
-        let a: Var<'static, AtomN<X>> = Var::new();
-        let _co: CoExpr<'static, AtomN<X>> =
-            mu_neg(|y: Var<'_, AtomP<X>>| cut(Expr::var(y), CoExpr::co_val(a)));
+    fn unit_cut() {
+        let u = unit();
+        let co = mu_unit(|| Command::new());
+        let _cmd: Command<'static> = cut(u, co);
     }
 
     #[test]
     fn tensor_intro() {
         let x: Var<'static, AtomP<X>> = Var::new();
         let y: Var<'static, AtomP<Y>> = Var::new();
-        let p = tensor::<'static, AtomP<X>, AtomP<Y>>(x, y);
-        let _expr: Expr<'static, Tensor<AtomP<X>, AtomP<Y>>> = Expr::val(p);
+        let _pair = tensor::<'static, AtomP<X>, AtomP<Y>>(x, y);
+    }
+
+    #[test]
+    fn mu_neg_binder() {
+        let a: Var<'static, AtomN<X>> = Var::new();
+        let _co = mu_neg::<'static, AtomN<X>, _>(|y: Var<'_, AtomP<X>>| cut(y, a));
     }
 
     #[test]
     fn par_destructor() {
-        // mu_par body: use both introduced variables in separate cuts.
-        // We return one command; the other is dropped (test only).
-        let _co: CoExpr<'static, Par<AtomN<X>, AtomN<Y>>> =
-            mu_par::<AtomP<X>, AtomP<Y>, _>(|x, y| {
-                let a: Var<'_, AtomN<X>> = Var::new();
-                let b: Var<'_, AtomN<Y>> = Var::new();
-                let cmd_x = cut(Expr::var(x), CoExpr::co_val(a));
-                let cmd_y = cut(Expr::var(y), CoExpr::co_val(b));
-                let _ = cmd_x; // in a real term, both would be composed
-                cmd_y
-            });
-    }
-
-    // Nested binders that capture outer variables do NOT compile because
-    // the `for<'x>` higher-rank bound requires the closure to be valid
-    // for all lifetimes 'x, which forbids capturing non-'static data.
-    // See NOTES.md for discussion.
-
-    #[test]
-    fn unit_and_bottom() {
-        let u = unit();
-        let _expr: Expr<'static, One> = Expr::val(u);
-        let _bot: CoExpr<'static, Bot> = mu_unit(|| Command::new());
-    }
-
-    #[test]
-    fn reduce_mu_neg_atom_works() {
-        let x: Var<'static, AtomP<X>> = Var::new();
-        // Build the body using the public constructor, then extract the inner MuNeg.
-        let co: CoExpr<'static, AtomN<X>> = mu_neg(|y: Var<'_, AtomP<X>>| {
+        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
             let a: Var<'_, AtomN<X>> = Var::new();
-            cut(Expr::var(y), CoExpr::co_val(a))
+            let b: Var<'_, AtomN<Y>> = Var::new();
+            let cmd_x = cut(x, a);
+            let _ = cmd_x;
+            cut(y, b)
         });
-        let body = match co {
-            CoExpr::MuNeg(body) => body,
-            _ => panic!("expected MuNeg"),
-        };
-        let _cmd = super::reduce_mu_neg_atom(x, body);
     }
 
+    /// **The key milestone for Option A**: nested binders that capture outer
+    /// variables.  In the first pass this failed because `for<'x>` combined
+    /// with `'static` boxing prevented capture.  With traits and specific
+    /// lifetimes, it compiles cleanly.
     #[test]
-    fn reduce_tensor_par_atom_works() {
+    fn nested_binders() {
+        // μ(x ⅋ y).⟨x | μz⁻.⟨y | w⟩⟩
+        // where w : Y⊥ is free.
+        let _w: Var<'static, AtomN<Y>> = Var::new();
+
+        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
+            cut(
+                x,
+                mu_neg::<'_, AtomN<X>, _>(|_z: Var<'_, AtomP<X>>| cut(y, _w)),
+            )
+        });
+    }
+
+    /// A more complex nesting: three levels of binders.
+    #[test]
+    fn triple_nested() {
+        let _w: Var<'static, AtomN<Y>> = Var::new();
+
+        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
+            cut(
+                x,
+                mu_neg::<'_, AtomN<X>, _>(|_z| {
+                    cut(
+                        y,
+                        mu_neg::<'_, AtomN<Y>, _>(|_a| {
+                            let b: Var<'_, AtomN<Y>> = Var::new();
+                            cut(_a, b) // use the innermost variable
+                        }),
+                    )
+                }),
+            )
+        });
+    }
+
+    /// Tensor of two variables cut against a par destructor.
+    #[test]
+    fn tensor_par_cut() {
         let x: Var<'static, AtomP<X>> = Var::new();
         let y: Var<'static, AtomP<Y>> = Var::new();
-        let co: CoExpr<'static, Par<AtomN<X>, AtomN<Y>>> =
-            mu_par::<AtomP<X>, AtomP<Y>, _>(|a, b| {
-                let m: Var<'_, AtomN<X>> = Var::new();
-                let n: Var<'_, AtomN<Y>> = Var::new();
-                let cmd1 = cut(Expr::var(a), CoExpr::co_val(m));
-                let _ = (cmd1, b, n);
-                Command::new()
-            });
-        let body = match co {
-            CoExpr::MuPar(boxed) => match boxed.downcast::<MuPar<AtomP<X>, AtomP<Y>>>() {
-                Ok(b) => *b,
-                Err(_) => panic!("downcast failed"),
-            },
-            _ => panic!("expected MuPar"),
-        };
-        let _cmd = super::reduce_tensor_par_atom(x, y, body);
+        let pair = tensor::<'static, AtomP<X>, AtomP<Y>>(x, y);
+
+        let co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|a, b| {
+            let m: Var<'_, AtomN<X>> = Var::new();
+            let n: Var<'_, AtomN<Y>> = Var::new();
+            let cmd1 = cut(a, m);
+            let _ = cmd1;
+            cut(b, n)
+        });
+
+        let _cmd: Command<'static> = cut(pair, co);
     }
 
-    /// This test demonstrates that the involutive duality bound compiles.
+    /// Demonstrate that the involutive duality bound still compiles.
     #[test]
     fn duality_involution() {
         fn check<P: Pos>() {}
@@ -437,7 +467,7 @@ mod tests {
     // Uncomment to verify that linearity is enforced:
     //   fn _linearity_violation() {
     //       let x: Var<'static, AtomP<X>> = Var::new();
-    //       let _ = Expr::var(x);
-    //       let _ = Expr::var(x); // ERROR: use of moved value
+    //       let _ = x;
+    //       let _ = x; // ERROR: use of moved value
     //   }
 }
