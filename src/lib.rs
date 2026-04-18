@@ -9,727 +9,19 @@
 //! describes the result of that step.  Reduction is invocation-based (Krivine-
 //! machine style), not AST inspection.
 
-use std::marker::PhantomData;
-
-// =============================================================================
-// 1.  Polarity traits
-// =============================================================================
-
-/// Positive types: atoms `X`, unit `1`, tensor `A ⊗ B`.
-///
-/// `Dual` computes the De Morgan dual (always in NNF).  `Value<'s>` is the
-/// type of introduction forms at scope `'s`.
-pub trait Pos: Sized + 'static {
-    /// The De Morgan dual — a negative type.
-    type Dual: Neg<Dual = Self>;
-    /// The concrete introduction form at scope `'s`.
-    type Value<'s>;
-}
-
-/// Negative types: dual atoms `X⊥`, unit `⊥`, par `A ⅋ B`.
-///
-/// `Dual` computes the De Morgan dual.  `CoValue<'s>` is the type of
-/// co-value forms at scope `'s`.
-pub trait Neg: Sized + 'static {
-    /// The De Morgan dual — a positive type.
-    type Dual: Pos<Dual = Self>;
-    /// The concrete co-value form at scope `'s`.
-    type CoValue<'s>;
-}
-
-// =============================================================================
-// 2.  Atoms
-// =============================================================================
-
-/// Positive atom `X`.
-pub struct AtomP<X>(PhantomData<X>);
-
-/// Negative atom `X⊥`.
-pub struct AtomN<X>(PhantomData<X>);
-
-impl<X: 'static> Pos for AtomP<X> {
-    type Dual = AtomN<X>;
-    /// The variable token *is* the atomic value.
-    type Value<'s> = Var<'s, AtomP<X>>;
-}
-
-impl<X: 'static> Neg for AtomN<X> {
-    type Dual = AtomP<X>;
-    /// The covariable token *is* the atomic co-value.
-    type CoValue<'s> = Var<'s, AtomN<X>>;
-}
-
-// =============================================================================
-// 3.  Multiplicative units
-// =============================================================================
-
-/// Positive unit `1`.
-pub struct One;
-
-/// Negative unit `⊥`.
-pub struct Bot;
-
-impl Pos for One {
-    type Dual = Bot;
-    type Value<'s> = ();
-}
-
-impl Neg for Bot {
-    type Dual = One;
-    /// `Bot` has no user-constructible co-value form.
-    type CoValue<'s> = std::convert::Infallible;
-}
-
-// =============================================================================
-// 4.  Multiplicative connectives
-// =============================================================================
-
-/// Tensor `A ⊗ B` (both components positive).
-pub struct Tensor<A: Pos, B: Pos>(PhantomData<(A, B)>);
-
-/// Par `A ⅋ B` (both components negative).
-pub struct Par<A: Neg, B: Neg>(PhantomData<(A, B)>);
-
-impl<A: Pos, B: Pos> Pos for Tensor<A, B>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-{
-    type Dual = Par<A::Dual, B::Dual>;
-    /// Crucial line: the tensor value lives in the intersection of its
-    /// components' lifetimes, computed automatically by Rust's covariance.
-    type Value<'s> = (A::Value<'s>, B::Value<'s>);
-}
-
-impl<A: Neg, B: Neg> Neg for Par<A, B>
-where
-    A::Dual: Pos,
-    B::Dual: Pos,
-{
-    type Dual = Tensor<A::Dual, B::Dual>;
-    /// `Par` has no user-constructible co-value form; introduction is only via
-    /// the `μ(x ⅋ y)` binder.
-    type CoValue<'s> = std::convert::Infallible;
-}
-
-// =============================================================================
-// 5.  Additive connectives
-// =============================================================================
-
-/// Positive sum `A ⊕ B` (choice made at introduction time).
-pub struct Plus<A: Pos, B: Pos>(PhantomData<(A, B)>);
-
-/// Negative with `A & B` (choice made at destruction time).
-pub struct With<A: Neg, B: Neg>(PhantomData<(A, B)>);
-
-/// Value of a sum type: either left or right injection.
-pub enum PlusValue<'s, A: Pos, B: Pos> {
-    Inl(A::Value<'s>),
-    Inr(B::Value<'s>),
-}
-
-impl<A: Pos, B: Pos> Pos for Plus<A, B>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-{
-    type Dual = With<A::Dual, B::Dual>;
-    type Value<'s> = PlusValue<'s, A, B>;
-}
-
-impl<A: Neg, B: Neg> Neg for With<A, B>
-where
-    A::Dual: Pos,
-    B::Dual: Pos,
-{
-    type Dual = Plus<A::Dual, B::Dual>;
-    /// `With` has no user-constructible co-value form; introduction is only
-    /// via the `μcase` binder.
-    type CoValue<'s> = std::convert::Infallible;
-}
-
-// -- PlusValue implements Expr ------------------------------------------------
-
-impl<'s, A: Pos, B: Pos> Expr<'s, Plus<A, B>> for PlusValue<'s, A, B>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-{
-}
-
-// =============================================================================
-// 6.  Exponential connectives
-// =============================================================================
-
-/// Positive exponential `!A` — duplicable values.
-///
-/// `Bang<A>` is a positive type whose values can be cloned and discarded.
-/// The underlying value is produced on demand via a closure, so each use
-/// obtains a fresh linear value.
-pub struct Bang<A: Pos>(PhantomData<A>);
-
-/// Negative exponential `?A` — dual of `!A`.
-pub struct Whynot<N: Neg>(PhantomData<N>);
-
-/// The value of `!A` at scope `'s`: a duplicable producer of `A::Value<'s>`.
-///
-/// Each invocation of the producer yields a fresh linear value.  The `Rc`
-/// wrapper provides `Clone` at zero additional cost beyond the reference
-/// count increment.
-pub struct BangValue<'s, A: Pos> {
-    producer: std::rc::Rc<dyn Fn() -> A::Value<'s> + 's>,
-    _marker: PhantomData<&'s ()>,
-}
-
-impl<'s, A: Pos> Clone for BangValue<'s, A> {
-    fn clone(&self) -> Self {
-        BangValue {
-            producer: self.producer.clone(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<A: Pos> Pos for Bang<A>
-where
-    A::Dual: Neg,
-{
-    type Dual = Whynot<A::Dual>;
-    type Value<'s> = BangValue<'s, A>;
-}
-
-impl<N: Neg> Neg for Whynot<N>
-where
-    N::Dual: Pos,
-{
-    type Dual = Bang<N::Dual>;
-    /// `Whynot` has no user-constructible co-value form; introduction is only
-    /// via the `μ!x` binder.
-    type CoValue<'s> = std::convert::Infallible;
-}
-
-// -- BangValue implements Expr ------------------------------------------------
-
-impl<'s, A: Pos> Expr<'s, Bang<A>> for BangValue<'s, A> where A::Dual: Neg {}
-
-// =============================================================================
-// 7.  Variables — linear tokens
-// =============================================================================
-
-/// A variable (or covariable) token.
-///
-/// * Non-`Copy`, non-`Clone` — using it twice is a compile error.
-/// * The lifetime `'x` is the scope in which this variable is valid.
-/// * `PhantomData<&'x ()>` makes `Var` **covariant** in `'x`.
-pub struct Var<'x, A> {
-    _marker: PhantomData<&'x ()>,
-    _type: PhantomData<A>,
-}
-
-impl<'x, A> Var<'x, A> {
-    /// Create a fresh variable token.  In a real term, variables are
-    /// introduced by binders; this constructor is useful for building
-    /// open terms (e.g., the axiom rule) and for testing.
-    pub fn new() -> Self {
-        Var {
-            _marker: PhantomData,
-            _type: PhantomData,
-        }
-    }
-}
-
-impl<'x, A> Default for Var<'x, A> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// Explicitly NOT implementing Clone or Copy.
-// Move semantics enforce linearity.
-
-// =============================================================================
-// 6.  Expression and co-expression traits (tagless-final style)
-// =============================================================================
-
-/// A positive expression `⊢ t : A | Γ` at scope `'s`.
-///
-/// `Expr` is a marker trait: any type implementing it is a well-formed
-/// positive expression of type `A` at scope `'s`.
-pub trait Expr<'s, A: Pos> {}
-
-/// A negative co-expression (value of negative type) at scope `'s`.
-///
-/// `CoExpr` is a marker trait: any type implementing it is a well-formed
-/// negative co-expression of type `N` at scope `'s`.
-pub trait CoExpr<'s, N: Neg> {}
-
-// -- Variables are expressions (axiom rule) ----------------------------------
-
-impl<'s, A: Pos> Expr<'s, A> for Var<'s, A> {}
-impl<'s, N: Neg> CoExpr<'s, N> for Var<'s, N> {}
-
-// -- Unit value is an expression ---------------------------------------------
-
-impl<'s> Expr<'s, One> for () {}
-
-// -- Tensor value (pair) is an expression ------------------------------------
-
-impl<'s, A: Pos, B: Pos> Expr<'s, Tensor<A, B>> for (A::Value<'s>, B::Value<'s>)
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-{
-}
-
-// =============================================================================
-// 7.  Binder types
-// =============================================================================
-
-/// Positive μ-binder `μ⁺α.c` at scope `'s`.
-///
-/// In classical System L, `μ⁺α.c` binds a covariable `α` of type `A::Dual`
-/// (negative).  The body receives `A::Dual::CoValue<'s>` — the co-value
-/// form for the dual of `A`.  For atomic types this is a negative `Var`.
-pub struct MuPos<'s, A: Pos, F> {
-    pub body: F,
-    _marker: PhantomData<&'s ()>,
-    _type: PhantomData<A>,
-}
-
-/// Negative μ-binder `μx⁻.c` at scope `'s`.
-///
-/// The body receives `N::Dual::Value<'s>` — the introduction form for the
-/// dual of `N`.  For atomic negative types this is a positive variable.
-pub struct MuNeg<'s, N: Neg, F> {
-    pub body: F,
-    _marker: PhantomData<&'s ()>,
-    _type: PhantomData<N>,
-}
-
-/// Bottom destructor `μ().c` at scope `'s`.
-pub struct MuUnit<'s, F> {
-    pub body: F,
-    _marker: PhantomData<&'s ()>,
-}
-
-/// Par destructor `μ(x ⅋ y).c` at scope `'s`.
-///
-/// The body receives `A::Value<'s>` and `B::Value<'s>` — the components
-/// of the tensor value that triggered this reduction.  For atoms these are
-/// variables; for composite types they are nested pairs.
-pub struct MuPar<'s, A: Pos, B: Pos, F> {
-    pub body: F,
-    _marker: PhantomData<&'s ()>,
-    _types: PhantomData<(A, B)>,
-}
-
-/// Case destructor `μcase(x ⇒ c₁, y ⇒ c₂)` at scope `'s`.
-///
-/// The binder carries two bodies, one for each injection.  When cut against
-/// a `PlusValue`, the appropriate body is invoked with the injected value.
-pub struct MuCase<'s, A: Pos, B: Pos, F1, F2> {
-    pub body_left: F1,
-    pub body_right: F2,
-    _marker: PhantomData<&'s ()>,
-    _types: PhantomData<(A, B)>,
-}
-
-/// Exponential destructor `μ!x.c` at scope `'s`.
-///
-/// The body receives a `BangValue<'s, A>` — a duplicable producer of
-/// `A::Value<'s>`.  The body may clone the producer any number of times
-/// (zero, one, many), or drop it without use.
-pub struct MuBang<'s, A: Pos, F> {
-    pub body: F,
-    _marker: PhantomData<&'s ()>,
-    _type: PhantomData<A>,
-}
-
-// =============================================================================
-// 8.  Binder trait implementations
-// =============================================================================
-
-impl<'s, A: Pos, F> Expr<'s, A> for MuPos<'s, A, F>
-where
-    A::Dual: Neg,
-    F: FnOnce(<A::Dual as Neg>::CoValue<'s>) -> Command<'s>,
-{
-}
-
-impl<'s, N: Neg, F> CoExpr<'s, N> for MuNeg<'s, N, F>
-where
-    N::Dual: Pos,
-    F: FnOnce(<N::Dual as Pos>::Value<'s>) -> Command<'s>,
-{
-}
-
-impl<'s, F> CoExpr<'s, Bot> for MuUnit<'s, F> where F: FnOnce() -> Command<'s> {}
-
-impl<'s, A: Pos, B: Pos, F> CoExpr<'s, Par<A::Dual, B::Dual>> for MuPar<'s, A, B, F>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-    F: FnOnce(A::Value<'s>, B::Value<'s>) -> Command<'s>,
-{
-}
-
-impl<'s, A: Pos, B: Pos, F1, F2> CoExpr<'s, With<A::Dual, B::Dual>> for MuCase<'s, A, B, F1, F2>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-    F1: FnOnce(A::Value<'s>) -> Command<'s>,
-    F2: FnOnce(B::Value<'s>) -> Command<'s>,
-{
-}
-
-impl<'s, A: Pos, F> CoExpr<'s, Whynot<A::Dual>> for MuBang<'s, A, F>
-where
-    A::Dual: Neg,
-    F: FnOnce(BangValue<'s, A>) -> Command<'s>,
-{
-}
-
-// =============================================================================
-// 9.  Outcome and Command
-// =============================================================================
-
-/// The result of invoking a command's reduction step.
-pub enum Outcome<'s> {
-    /// Reduction has reached a normal form (no further steps possible).
-    Done,
-    /// One reduction step was performed; the resulting command is ready
-    /// for the next step.
-    Step(Command<'s>),
-    /// Reduction is stuck — the current configuration has no applicable
-    /// reduction rule.  This should not occur in well-typed programs.
-    Stuck(StuckReason),
-}
-
-impl<'s> std::fmt::Debug for Outcome<'s> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Outcome::Done => write!(f, "Done"),
-            Outcome::Step(_) => write!(f, "Step(Command {{ .. }})"),
-            Outcome::Stuck(r) => write!(f, "Stuck({r:?})"),
-        }
-    }
-}
-
-/// Why a command is stuck.
-#[derive(Debug, PartialEq, Clone)]
-pub enum StuckReason {
-    /// The generic `cut` was used with a configuration that has no
-    /// operational reduction rule (static-only well-formedness check).
-    StaticOnly,
-    /// Catch-all for unexpected configurations during development.
-    Unexpected(String),
-}
-
-/// A command `c : (⊢ Γ)` at scope `'s`.
-///
-/// A command is a **continuation**: a closure that, when
-/// invoked, performs one operational step and returns an `Outcome`.
-pub struct Command<'s> {
-    step: Box<dyn FnOnce() -> Outcome<'s> + 's>,
-}
-
-impl<'s> std::fmt::Debug for Command<'s> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Command {{ .. }}")
-    }
-}
-
-impl<'s> Command<'s> {
-    /// Invoke the command's reduction step.
-    pub fn run_once(self) -> Outcome<'s> {
-        (self.step)()
-    }
-
-    /// Construct a stuck command.
-    pub fn stuck(reason: StuckReason) -> Self {
-        Command {
-            step: Box::new(move || Outcome::Stuck(reason)),
-        }
-    }
-}
-
-/// Drive a command to a terminal state (`Done` or `Stuck`).
-pub fn run<'s>(mut cmd: Command<'s>) -> Outcome<'s> {
-    loop {
-        match cmd.run_once() {
-            Outcome::Done => return Outcome::Done,
-            Outcome::Step(next) => cmd = next,
-            o @ Outcome::Stuck(_) => return o,
-        }
-    }
-}
-
-// =============================================================================
-// 10. Constructors
-// =============================================================================
-
-/// Positive μ-binder: `μ⁺α.c`.
-pub fn mu_pos<'s, A: Pos, F>(body: F) -> MuPos<'s, A, F>
-where
-    A::Dual: Neg,
-    F: FnOnce(<A::Dual as Neg>::CoValue<'s>) -> Command<'s>,
-{
-    MuPos {
-        body,
-        _marker: PhantomData,
-        _type: PhantomData,
-    }
-}
-
-/// Negative μ-binder: `μx⁻.c`.
-pub fn mu_neg<'s, N: Neg, F>(body: F) -> MuNeg<'s, N, F>
-where
-    N::Dual: Pos,
-    F: FnOnce(<N::Dual as Pos>::Value<'s>) -> Command<'s>,
-{
-    MuNeg {
-        body,
-        _marker: PhantomData,
-        _type: PhantomData,
-    }
-}
-
-/// Unit introduction: `()`.
-#[allow(clippy::unused_unit)]
-pub fn unit() -> () {
-    ()
-}
-
-/// Tensor introduction: `V ⊗ W`.
-pub fn tensor<'s, A: Pos, B: Pos>(v: A::Value<'s>, w: B::Value<'s>) -> impl Expr<'s, Tensor<A, B>>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-{
-    (v, w)
-}
-
-/// Bottom destructor: `μ().c`.
-pub fn mu_unit<'s, F>(body: F) -> MuUnit<'s, F>
-where
-    F: FnOnce() -> Command<'s>,
-{
-    MuUnit {
-        body,
-        _marker: PhantomData,
-    }
-}
-
-/// Par destructor: `μ(x ⅋ y).c`.
-pub fn mu_par<'s, A: Pos, B: Pos, F>(body: F) -> MuPar<'s, A, B, F>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-    F: FnOnce(A::Value<'s>, B::Value<'s>) -> Command<'s>,
-{
-    MuPar {
-        body,
-        _marker: PhantomData,
-        _types: PhantomData,
-    }
-}
-
-/// Case destructor: `μcase(x ⇒ c₁, y ⇒ c₂)`.
-pub fn mu_case<'s, A: Pos, B: Pos, F1, F2>(
-    body_left: F1,
-    body_right: F2,
-) -> MuCase<'s, A, B, F1, F2>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-    F1: FnOnce(A::Value<'s>) -> Command<'s>,
-    F2: FnOnce(B::Value<'s>) -> Command<'s>,
-{
-    MuCase {
-        body_left,
-        body_right,
-        _marker: PhantomData,
-        _types: PhantomData,
-    }
-}
-
-/// Exponential destructor: `μ!x.c`.
-pub fn mu_bang<'s, A: Pos, F>(body: F) -> MuBang<'s, A, F>
-where
-    A::Dual: Neg,
-    F: FnOnce(BangValue<'s, A>) -> Command<'s>,
-{
-    MuBang {
-        body,
-        _marker: PhantomData,
-        _type: PhantomData,
-    }
-}
-
-/// Promote a closed computation to a classical (duplicable) value.
-///
-/// Takes a producer closure `Fn() -> A::Value<'s>` that can be invoked any
-/// number of times, each time yielding a fresh linear value.  The producer
-/// must be closed (no free linear variables) — this is enforced by Rust's
-/// move semantics on the closure.
-pub fn promote<'s, A: Pos, F>(producer: F) -> BangValue<'s, A>
-where
-    A::Dual: Neg,
-    F: Fn() -> A::Value<'s> + 's,
-{
-    BangValue {
-        producer: std::rc::Rc::new(producer),
-        _marker: PhantomData,
-    }
-}
-
-/// Derelict: extract a linear value from a classical producer.
-///
-/// Invokes the producer once, yielding a fresh `A::Value<'s>`.
-pub fn derelict<'s, A: Pos>(v: BangValue<'s, A>) -> A::Value<'s>
-where
-    A::Dual: Neg,
-{
-    (v.producer)()
-}
-
-// =============================================================================
-// 11. Reduction step functions (specific cuts)
-// =============================================================================
-
-/// Generic cut: `⟨t | V⟩`.
-///
-/// The type system ensures the two sides have dual types, but without
-/// knowing the specific introduction forms, no operational reduction can
-/// be performed.  The resulting command is stuck.
-pub fn cut<'s, A: Pos, T, E>(_t: T, _e: E) -> Command<'s>
-where
-    T: Expr<'s, A>,
-    E: CoExpr<'s, A::Dual>,
-    A::Dual: Neg,
-{
-    Command::stuck(StuckReason::StaticOnly)
-}
-
-/// Atomic cut: `⟨x | μy⁻.c⟩` where `x` is a variable.
-///
-/// Reduction rule: invoke the binder body with `x`.
-///
-/// For atomic types, `AtomP<X>::Value<'s> = Var<'s, AtomP<X>>`, so the
-/// binder body receives the variable directly.
-pub fn cut_atom<'s, X: 'static, F>(
-    v: Var<'s, AtomP<X>>,
-    binder: MuNeg<'s, AtomN<X>, F>,
-) -> Command<'s>
-where
-    F: FnOnce(Var<'s, AtomP<X>>) -> Command<'s> + 's,
-{
-    let body = binder.body;
-    Command {
-        step: Box::new(move || Outcome::Step(body(v))),
-    }
-}
-
-/// Unit cut: `⟨() | μ().c⟩`.
-///
-/// Reduction rule: invoke the binder body with no argument.
-pub fn cut_unit<'s, F>(_v: (), binder: MuUnit<'s, F>) -> Command<'s>
-where
-    F: FnOnce() -> Command<'s> + 's,
-{
-    let body = binder.body;
-    Command {
-        step: Box::new(move || Outcome::Step(body())),
-    }
-}
-
-/// Positive atomic cut: `⟨μ⁺α.c | x⊥⟩` where `x⊥` is a covariable.
-///
-/// Reduction rule: invoke the binder body with the covariable.
-///
-/// For atomic types, `AtomN<X>::CoValue<'s> = Var<'s, AtomN<X>>`, so the
-/// binder body receives the covariable directly.
-pub fn cut_pos_atom<'s, X: 'static, F>(
-    binder: MuPos<'s, AtomP<X>, F>,
-    v: Var<'s, AtomN<X>>,
-) -> Command<'s>
-where
-    F: FnOnce(Var<'s, AtomN<X>>) -> Command<'s> + 's,
-{
-    let body = binder.body;
-    Command {
-        step: Box::new(move || Outcome::Step(body(v))),
-    }
-}
-
-/// Tensor-par cut: `⟨V ⊗ W | μ(x ⅋ y).c⟩`.
-///
-/// Reduction rule: destructure the pair and invoke the binder body with
-/// the components.  Because binder bodies now receive `A::Value<'s>` and
-/// `B::Value<'s>` (not `Var`s), this works for both atomic and composite
-/// types without conversion.
-///
-/// For composite components, the binder body receives nested pairs and
-/// can use further `cut_par` calls to destructure them (Milestone 4).
-pub fn cut_par<'s, A: Pos, B: Pos, F>(
-    v: (A::Value<'s>, B::Value<'s>),
-    binder: MuPar<'s, A, B, F>,
-) -> Command<'s>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-    F: FnOnce(A::Value<'s>, B::Value<'s>) -> Command<'s> + 's,
-{
-    let body = binder.body;
-    let (a, b) = v;
-    Command {
-        step: Box::new(move || Outcome::Step(body(a, b))),
-    }
-}
-
-/// Additive cut: `⟨V | μcase(x ⇒ c₁, y ⇒ c₂)⟩`.
-///
-/// Reduction rule: inspect the injection and invoke the corresponding
-/// body with the injected value.  This is the first reduction in the
-/// library that performs runtime dispatch (the value's shape determines
-/// which branch runs).
-pub fn cut_plus<'s, A: Pos, B: Pos, F1, F2>(
-    v: PlusValue<'s, A, B>,
-    binder: MuCase<'s, A, B, F1, F2>,
-) -> Command<'s>
-where
-    A::Dual: Neg,
-    B::Dual: Neg,
-    F1: FnOnce(A::Value<'s>) -> Command<'s> + 's,
-    F2: FnOnce(B::Value<'s>) -> Command<'s> + 's,
-{
-    Command {
-        step: Box::new(move || match v {
-            PlusValue::Inl(a) => Outcome::Step((binder.body_left)(a)),
-            PlusValue::Inr(b) => Outcome::Step((binder.body_right)(b)),
-        }),
-    }
-}
-
-/// Exponential cut: `⟨!V | μ!x.c⟩`.
-///
-/// Reduction rule: invoke the binder body with the `BangValue`.  The body
-/// may clone the producer (duplication), drop it (weakening), or use it
-/// exactly once — all are permitted for classical values.
-pub fn cut_bang<'s, A: Pos, F>(v: BangValue<'s, A>, binder: MuBang<'s, A, F>) -> Command<'s>
-where
-    A::Dual: Neg,
-    F: FnOnce(BangValue<'s, A>) -> Command<'s> + 's,
-{
-    let body = binder.body;
-    Command {
-        step: Box::new(move || Outcome::Step(body(v))),
-    }
-}
-
-// =============================================================================
-// 12. Tests
-// =============================================================================
+pub mod binder;
+pub mod expr;
+pub mod machine;
+pub mod reduce;
+pub mod types;
+pub mod var;
+
+pub use binder::*;
+pub use expr::{CoExpr, Expr};
+pub use machine::{run, Command, Outcome, StuckReason};
+pub use reduce::*;
+pub use types::*;
+pub use var::Var;
 
 #[cfg(test)]
 mod tests {
@@ -833,9 +125,9 @@ mod tests {
         check::<Tensor<AtomP<X>, AtomP<Y>>>();
     }
 
-    // =============================================================================
+    // ==========================================================================
     // Operational tests
-    // =============================================================================
+    // ==========================================================================
 
     /// **Milestone 1**: Atomic cut reduces.
     /// `cut_atom(x, μy⁻.⟨y | z⟩)` should step to `⟨x | z⟩`.
@@ -968,6 +260,180 @@ mod tests {
         assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
     }
 
+    /// **Milestone 2 (Par commuting conversion)**: `⟨μ⁺α.c | μ(x ⅋ y).d⟩` reduces.
+    /// The positive binder receives the par destructor as a `ParCoValue::Cont`
+    /// and invokes it with the tensor components.
+    #[test]
+    fn milestone_2_commuting_par() {
+        let x: Var<'static, AtomP<X>> = Var::new();
+        let y: Var<'static, AtomP<Y>> = Var::new();
+        let m: Var<'static, AtomN<X>> = Var::new();
+        let n: Var<'static, AtomN<Y>> = Var::new();
+
+        let pos = mu_pos::<'static, Tensor<AtomP<X>, AtomP<Y>>, _>(
+            |a: ParCoValue<'_, AtomN<X>, AtomN<Y>>| match a {
+                ParCoValue::Cont(k) => k(x, y),
+            },
+        );
+        let neg = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|a, b| {
+            let cmd1 = cut_atom(a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m)));
+            let _ = cmd1;
+            cut_atom(b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n)))
+        });
+        let cmd = cut_pos_par(pos, neg);
+        let _outcome = run(cmd);
+    }
+
+    /// **Milestone 3 (Plus/With commuting conversion)**: `⟨μ⁺α.c | μcase(...).d⟩` reduces.
+    /// The positive binder receives the case destructor as a `WithCoValue::Cont`
+    /// and invokes the branch matching its injection.
+    #[test]
+    fn milestone_3_commuting_plus_with() {
+        let x: Var<'static, AtomP<X>> = Var::new();
+        let m: Var<'static, AtomN<X>> = Var::new();
+        let n: Var<'static, AtomN<Y>> = Var::new();
+
+        let pos = mu_pos::<'static, Plus<AtomP<X>, AtomP<Y>>, _>(move |a| match a {
+            WithCoValue::Cont { left, right: _ } => left(x),
+        });
+        let neg = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+            |a| cut_atom(a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
+            |_b| cut_atom(_b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n))),
+        );
+        let cmd = cut_pos_plus(pos, neg);
+        let outcome = run(cmd);
+        assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
+    }
+
+    /// **Milestone 3b (Plus/With commuting conversion, right branch)**.
+    #[test]
+    fn milestone_3_commuting_plus_with_right() {
+        let y: Var<'static, AtomP<Y>> = Var::new();
+        let m: Var<'static, AtomN<X>> = Var::new();
+        let n: Var<'static, AtomN<Y>> = Var::new();
+
+        let pos = mu_pos::<'static, Plus<AtomP<X>, AtomP<Y>>, _>(move |a| match a {
+            WithCoValue::Cont { left: _, right } => right(y),
+        });
+        let neg = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+            |_a| cut_atom(_a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
+            |b| cut_atom(b, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n))),
+        );
+        let cmd = cut_pos_plus(pos, neg);
+        let outcome = run(cmd);
+        assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
+    }
+
+    /// **Milestone 4 (Bang/Whynot commuting conversion)**: `⟨μ⁺α.c | μ!x.d⟩` reduces.
+    /// The positive binder receives the exponential destructor as a
+    /// `WhynotCoValue::Cont` and invokes it with a `BangValue`.
+    #[test]
+    fn milestone_4_commuting_bang_whynot() {
+        let bang = promote::<'static, AtomP<X>, _>(|| Var::new());
+        let m: Var<'static, AtomN<X>> = Var::new();
+
+        let pos = mu_pos::<'static, Bang<AtomP<X>>, _>(move |a| match a {
+            WhynotCoValue::Cont(k) => k(bang),
+        });
+        let neg = mu_bang::<'static, AtomP<X>, _>(|b| {
+            let v = derelict(b);
+            cut(v, m)
+        });
+        let cmd = cut_pos_bang(pos, neg);
+        let _outcome = run(cmd);
+    }
+
+    /// **Milestone 5 (Mixed reduction)**: Multiple commuting conversions
+    /// composed with principal cuts, reducing end-to-end.
+    ///
+    /// Trace:
+    /// 1. `cut_pos_par` (par commuting conversion) steps to the par body
+    /// 2. Par body returns `cut_pos_plus` (with commuting conversion)
+    /// 3. With commuting steps to the plus body invoking `left`
+    /// 4. `left` body does `cut_atom` (principal cut)
+    /// 5. Principal cut steps to generic `cut` (stuck)
+    #[test]
+    fn milestone_5_mixed_reduction() {
+        let x1: Var<'static, AtomP<X>> = Var::new();
+        let y1: Var<'static, AtomP<Y>> = Var::new();
+        let x2: Var<'static, AtomP<X>> = Var::new();
+        let m: Var<'static, AtomN<X>> = Var::new();
+
+        // Inner: a plus/with commuting conversion
+        let pos2 = mu_pos::<'static, Plus<AtomP<X>, AtomP<Y>>, _>(move |a| match a {
+            WithCoValue::Cont { left, right: _ } => left(x2),
+        });
+        let neg2 = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+            |a| cut_atom(a, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m))),
+            |_b| Command::stuck(StuckReason::Unexpected("wrong branch".into())),
+        );
+
+        // Outer: a par commuting conversion whose body returns the inner one
+        let pos = mu_pos::<'static, Tensor<AtomP<X>, AtomP<Y>>, _>(move |a| match a {
+            ParCoValue::Cont(k) => k(x1, y1),
+        });
+        let neg = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|_a, _b| cut_pos_plus(pos2, neg2));
+        let cmd = cut_pos_par(pos, neg);
+        let outcome = run(cmd);
+        assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
+    }
+
+    /// **Milestone 2b (Par commuting conversion with composites)**:
+    /// Nested tensor components passed through `ParCoValue::Cont`.
+    #[test]
+    fn milestone_2_commuting_par_composites() {
+        let x: Var<'static, AtomP<X>> = Var::new();
+        let y: Var<'static, AtomP<Y>> = Var::new();
+        let m: Var<'static, AtomN<X>> = Var::new();
+        let n: Var<'static, AtomN<Y>> = Var::new();
+
+        let inner = (x, y);
+
+        let pos = mu_pos::<'static, Tensor<Tensor<AtomP<X>, AtomP<Y>>, One>, _>(move |a| match a {
+            ParCoValue::Cont(k) => k(inner, ()),
+        });
+        let neg = mu_par::<'static, Tensor<AtomP<X>, AtomP<Y>>, One, _>(|a, _b| {
+            cut_par(
+                a,
+                mu_par::<'_, AtomP<X>, AtomP<Y>, _>(|a1, b1| {
+                    let cmd1 = cut_atom(a1, mu_neg::<'_, AtomN<X>, _>(|v| cut(v, m)));
+                    let _ = cmd1;
+                    cut_atom(b1, mu_neg::<'_, AtomN<Y>, _>(|v| cut(v, n)))
+                }),
+            )
+        });
+        let cmd = cut_pos_par(pos, neg);
+        let _outcome = run(cmd);
+    }
+
+    /// **Milestone 1 (Bot commuting conversion)**: `⟨μ⁺().c | μ().d⟩` reduces.
+    /// The positive binder receives the negative binder as a `BotCoValue::Cont`
+    /// and invokes it, stepping to the negative binder's body.
+    #[test]
+    fn milestone_1_commuting_unit() {
+        let marker = std::rc::Rc::new(std::cell::Cell::new(false));
+        let marker2 = marker.clone();
+
+        let pos = mu_pos::<'static, One, _>(|a: BotCoValue<'_>| {
+            // Invoke the continuation: this is what a commuting conversion does.
+            match a {
+                BotCoValue::Cont(k) => k(),
+            }
+        });
+        let neg = mu_unit(move || {
+            marker2.set(true);
+            Command::stuck(StuckReason::Unexpected("reached".into()))
+        });
+        let cmd = cut_pos_unit(pos, neg);
+
+        let outcome = run(cmd);
+        assert!(marker.get());
+        assert!(matches!(
+            outcome,
+            Outcome::Stuck(StuckReason::Unexpected(_))
+        ));
+    }
+
     /// **Extension 1**: Positive atomic cut reduces.
     /// `cut_pos_atom(μ⁺α.⟨x | α⟩, z)` should step to `⟨x | z⟩`.
     #[test]
@@ -1013,9 +479,9 @@ mod tests {
         assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
     }
 
-    // =============================================================================
+    // ==========================================================================
     // Extension 2: Additive connectives
-    // =============================================================================
+    // ==========================================================================
 
     /// Duality of additive connectives.
     #[test]
@@ -1062,9 +528,9 @@ mod tests {
         assert!(matches!(outcome, Outcome::Stuck(StuckReason::StaticOnly)));
     }
 
-    // =============================================================================
+    // ==========================================================================
     // Extension 3: Exponential connectives
-    // =============================================================================
+    // ==========================================================================
 
     /// Milestone 1: `Bang` and `Whynot` types compile with correct duality.
     #[test]
