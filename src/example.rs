@@ -1,4 +1,4 @@
-//! Concrete examples exercising the sequents library (Option B).
+//! Concrete examples exercising the sequents library.
 //!
 //! This file is NOT compiled as part of the library crate.  It exists as
 //! documentation-by-example.  All code shown here has been verified to
@@ -8,6 +8,10 @@ use sequents::*;
 
 struct X;
 struct Y;
+
+// ============================================================================
+// Constructing well-formed terms
+// ============================================================================
 
 fn example_atomic_axiom() {
     let x: Var<'static, AtomP<X>> = Var::new();
@@ -70,9 +74,9 @@ fn example_tensor_par_cut() {
     let _cmd: Command<'static> = cut(pair, co);
 }
 
-// ---------------------------------------------------------------------------
-// Option B operational examples
-// ---------------------------------------------------------------------------
+// ============================================================================
+// Reducing terms
+// ============================================================================
 
 fn example_atomic_reduction() {
     let x: Var<'static, AtomP<X>> = Var::new();

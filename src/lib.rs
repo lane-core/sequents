@@ -4,7 +4,7 @@
 //! into Rust's type system.  Scope structure is carried by lifetimes; linearity
 //! is enforced by move semantics.
 //!
-//! This is **Option B** from the design memo: `Command<'s>` is a continuation
+//! `Command<'s>` is a continuation
 //! (a closure that performs a reduction step when invoked), and `Outcome<'s>`
 //! describes the result of that step.  Reduction is invocation-based (Krivine-
 //! machine style), not AST inspection.
@@ -283,7 +283,7 @@ pub enum StuckReason {
 
 /// A command `c : (⊢ Γ)` at scope `'s`.
 ///
-/// In Option B, a command is a **continuation**: a closure that, when
+/// A command is a **continuation**: a closure that, when
 /// invoked, performs one operational step and returns an `Outcome`.
 pub struct Command<'s> {
     step: Box<dyn FnOnce() -> Outcome<'s> + 's>,
@@ -571,7 +571,7 @@ mod tests {
     }
 
     // =============================================================================
-    // Option B operational tests
+    // Operational tests
     // =============================================================================
 
     /// **Milestone 1**: Atomic cut reduces.
@@ -706,8 +706,8 @@ mod tests {
     }
 
     /// **Milestone 6**: Nested binders reduce correctly.
-    /// Three levels of binders with outer capture, translated from the
-    /// Option A `triple_nested` test into operational form.
+    /// Three levels of binders with outer capture
+    /// Three levels of binders with outer capture.
     #[test]
     fn milestone_6_nested_binders() {
         let x: Var<'static, AtomP<X>> = Var::new();

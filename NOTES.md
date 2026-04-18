@@ -1,265 +1,166 @@
 # Notes: Linear System L in Rust via Lifetimes
 
-## Overview
+## What this library is
 
-This is a research prototype validating the thesis that Rust's lifetime system
-can faithfully carry the scope structure of simply-typed linear System L.  The
-library has been through two design iterations:
+A trait-based embedding of the multiplicative fragment of linear classical
+System L, with static well-formedness enforced by Rust's type system and
+operational semantics implemented as continuation-based commands (Krivine-
+machine style).
 
-- **First pass** (enum-based AST): validated static well-formedness but hit
-  friction in four places that all traced to one root cause.
-- **Option A** (trait-based, tagless-final): replaces enums with traits.  Each
-  introduction form is its own type.  This eliminates the enum-based friction
-  and enables nested binders.
+Scope structure is carried by lifetimes. Linearity is enforced by non-Copy
+move semantics. Polarity is a trait-level predicate with operational content.
+NNF is enforced by the grammar (no type constructor for negation).
 
-## What the first pass established
+## Key architectural commitments
 
-The first pass proved that the core static thesis holds:
+These are load-bearing and should not be revisited without good reason:
 
-- NNF enforced by grammar ✓
-- Polarity traits carry operational content (`Value<'s>`, `CoValue<'s>`) ✓
-- `for<'x>` gives α-equivalence and capture-avoidance for free ✓
-- Linearity via non-Copy move semantics ✓
-- Scope safety by construction ✓
+1. **Scope structure carried by lifetimes.** Each binder introduces variables
+   at a specific scope `'s`. The lifetime parameter propagates through
+   expressions, values, and commands.
 
-## Why the first pass hit friction
+2. **Linearity enforced by non-Copy move semantics.** `Var<'s, A>` is not
+   `Copy` or `Clone`. Using a variable twice is a compile error. This is the
+   correct level of abstraction for linear logic in Rust.
 
-The first pass tried to build a concrete inspectable AST using Rust's enum
-system while also carrying rich type-level information via traits and lifetimes.
-Those two goals fight each other:
+3. **Polarity as trait-level predicates.** `Pos` and `Neg` traits carry
+   `Dual`, `Value<'s>`, and `CoValue<'s>` as associated types. NNF is enforced
+   because negation is not a user-constructible type constructor — it is
+   computed structurally by `Dual`.
 
-- Enums have runtime tags but no per-variant type refinement (no GADTs)
-- So `CoExpr<'s, N>` needed `Box<dyn Any>` for the `MuPar` variant
-- `FnOnce` trait objects aren't callable on stable Rust, requiring custom binder
-  traits with `self: Box<Self>`
-- Boxing closures required `+ 'static`, which prevented nested binders from
-  capturing outer variables
-- `Command<'s>` became an opaque ZST because trait objects with
-  lifetime-returning methods are invariant
+4. **Trait-based `Expr`/`CoExpr` (tagless-final).** Each introduction form is
+   its own type implementing the appropriate trait. Enums were tried and
+   abandoned because Rust lacks GADT-style per-variant type refinement.
 
-**The pattern**: when a local workaround appears, zoom out and ask whether the
-structure causing the workaround is necessary.  The enum representation was
-causing all the workarounds.
+5. **Value-based binder bodies.** Binders take `A::Value<'s>` (introduction
+   forms) rather than `Var<'s, A>` (tokens). For atoms this is the same
+   (`Value<'s> = Var<'s, Self>`), but for composites it means the body receives
+   the actual structured value (e.g., a nested pair) and can destructure it
+   recursively. Substitution becomes argument-passing to the closure.
 
-## Option A: Traits instead of enums
+6. **Continuation-based commands.** `Command<'s>` is a struct wrapping
+   `Box<dyn FnOnce() -> Outcome<'s> + 's>`. Reduction is invocation. Each
+   specific cut (`cut_atom`, `cut_par`, `cut_unit`) builds a closure that
+   performs its reduction step when invoked. A trampolined `run()` driver
+   loops until `Done` or `Stuck`.
 
-### The design
+7. **Specific-lifetime closures, not HRTB.** Binder bodies take concrete
+   lifetimes (`FnOnce(Var<'s, A>) -> Command<'s>`), not higher-rank
+   quantification (`for<'x> FnOnce(Var<'x, A>) -> Command<'x>`). This enables
+   capture of outer variables. Freshness is guaranteed by value identity
+   (distinct `Var` values), not type-level universal quantification.
 
-`Expr<'s, A>` and `CoExpr<'s, N>` are traits (empty markers), not enums.  Each
-introduction form is a distinct type implementing the appropriate trait:
+## Documented constraint: HRTB and capture are incompatible
 
-```rust
-pub trait Expr<'s, A: Pos> {}
-pub trait CoExpr<'s, N: Neg> {}
+A real finding about Rust's type system, not a workaround gap:
 
-impl<'s, A: Pos> Expr<'s, A> for Var<'s, A> {}        // axiom
-impl<'s, N: Neg> CoExpr<'s, N> for Var<'s, N> {}      // axiom (negative)
-impl<'s> Expr<'s, One> for () {}                       // unit
-impl<'s, A: Pos, B: Pos> Expr<'s, Tensor<A, B>>
-    for (A::Value<'s>, B::Value<'s>) {}               // tensor
+In Rust's affine region logic, universal quantification over lifetimes
+(`for<'x>`) is incompatible with capture of non-`'static` lifetime-carrying
+data. The universal quantifier ranges over all lifetimes, including `'static`.
+When a closure captures `Var<'a, ()>` and uses it where `Var<'x, ()>` is
+expected, Rust needs `'a: 'x` for all `'x`. Since `'x` includes `'static`, this
+requires `'a: 'static`. But `'a` is a generic lifetime parameter — it does not
+necessarily outlive `'static`.
 
-// Binders are structs parameterized by a specific lifetime 's
-pub struct MuNeg<'s, N: Neg, F> { body: F, ... }
-impl<'s, N: Neg, F> CoExpr<'s, N> for MuNeg<'s, N, F>
-where F: FnOnce(Var<'s, N::Dual>) -> Command<'s> {}
-```
+This constrains binder closures to take concrete lifetimes. Value-level
+freshness (distinct `Var` values + move semantics) fills the role that type-
+level freshness would have played. Two binders at the same scope produce
+variables with the same lifetime type but distinct values — this is
+α-equivalence, and it is semantically correct.
 
-Constructors return `impl Expr<'s, A>` or `impl CoExpr<'s, N>`:
+## The value-based binder insight
 
-```rust
-pub fn mu_neg<'s, N: Neg, F>(body: F) -> impl CoExpr<'s, N>
-where F: FnOnce(Var<'s, N::Dual>) -> Command<'s>
-```
+What makes composite reduction work: substitution becomes argument-passing to
+the closure, shape-matching happens at the type level, no environment or term
+rewriting is needed.
 
-### What this fixes
+In System L, `⟨V ⊗ W | μ(x ⅋ y).c⟩ ▷ c[V/x, W/y]`. In this library, the
+reduction step passes `V` and `W` directly to the binder body closure as its
+arguments. The closure receives them as `A::Value<'s>` and `B::Value<'s>` and
+can use further `cut_par` calls to destructure recursively.
 
-1. **`Box<dyn Any>` eliminated.** `MuPar<'s, A, B, F>` has its natural type and
-   implements `CoExpr<'s, Par<A::Dual, B::Dual>>` directly.  No runtime type
-   erasure.
+This is one of several legitimate choices for classical sequent calculus. It
+is appropriate for a Krivine-machine implementation because it mirrors the
+machine's stack discipline: values are popped from the stack and bound to the
+binder's parameters.
 
-2. **Custom binder traits eliminated.** `MuNeg` stores `F` directly, not
-   `Box<dyn NegBinder<N>>`.  The closure type is visible to the type system.
-   No `self: Box<Self>` workaround.
+## What the library does
 
-3. **`'static` bounds eliminated.** Since there is no boxing, closures don't
-   need `+ 'static`.  They can capture variables from any outer scope.
+### Static well-formedness
+- Every well-typed term is a well-typed Rust expression
+- NNF, polarity, linearity, and scope safety are enforced at compile time
+- No ill-formed System L term can be constructed
 
-4. **`Command` stays a ZST but for a good reason.** In Phase 1 it's just a
-   marker.  Phase 2 may give it operational content (continuation-based
-   reduction).  The opacity is intentional, not a workaround.
+### Operational semantics
+- `cut_atom` reduces an atomic cut by invoking the binder body with the value
+- `cut_unit` reduces a unit cut by invoking the body with no arguments
+- `cut_par` reduces a tensor-par cut by destructuring the pair and invoking
+  the body with the components; composite values are handled by nested
+  `cut_par` calls
+- `run()` drives a command to terminal state
 
-5. **Nested binders compile cleanly.** This is the key milestone.
+### Connectives
+- Atoms: `AtomP<X>`, `AtomN<X>`
+- Units: `One`, `Bot`
+- Multiplicatives: `Tensor<A, B>`, `Par<A, B>`
 
-### The nested binder milestone
+## What is not in the library yet
 
-The term `μ(x ⅋ y).⟨x | μz⁻.⟨y | w⟩⟩` — where `w` is free in the outer scope —
-now compiles:
+- **Positive cuts (`cut_pos`):** `MuPos` and `mu_pos` are defined but not
+  exercised operationally. A positive cut `⟨μx⁺.c | V⟩` would reduce by
+  invoking the binder body with `V`. The atomic case is straightforward.
+  Composite positive cuts against `Par` co-values go through `MuPar` (already
+  implemented).
 
-```rust
-let w: Var<'static, AtomN<Y>> = Var::new();
-let co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
-    cut(x, mu_neg::<'_, AtomN<X>, _>(|_z| cut(y, w)))
-});
-```
+- **Additives (`A ⊕ B` and `A & B`):** Sum types with left/right injections
+  and case destructors. This would exercise runtime dispatch (the value selects
+  which branch of the case to run).
 
-The inner `mu_neg` captures `y` from the outer `mu_par` scope.  This works
-because:
+- **Exponentials (`!A` and `?A`):** Controlled weakening and contraction.
+  Requires `Clone` semantics for values, which conflicts with the current
+  linearity-by-move design. This is a substantial extension.
 
-- The binder constructors take a **specific lifetime `'s`** (not `for<'x>`)
-- The closure body returns `Command<'s>` where `'s` matches the outer scope
-- No `'static` bound prevents the capture
+## Ergonomic costs
 
-### The lifetime design decision (and the HRTB question)
+### Turbofish on nested composite constructors
 
-The first pass used `for<'x> FnOnce(Var<'x, A>) -> Command<'x>` for binder
-bodies.  The architectural thesis claimed that `for<'x>` gives α-equivalence
-and freshness for free — each binder introduces a genuinely fresh, universally-
-quantified lifetime.
-
-Option A dropped `for<'x>` in favor of specific lifetimes:
-`FnOnce(Var<'s, A>) -> Command<'s>`.  This enables capture but weakens the
-type-level freshness guarantee.  The question was whether `for<'x>` could be
-preserved alongside capture by separating the binder's outer lifetime from the
-variable's inner lifetime.
-
-**Investigation result: HRTB + non-`'static` capture is incompatible.**
-
-Tested the proposed signature:
-
-```rust
-pub fn mu_neg_hrtb<'outer, F>(body: F) -> Command<'outer>
-where
-    F: for<'x> FnOnce(Var<'x, ()>) -> Command<'x> + 'outer,
-```
-
-Against a nested binder capturing a non-`'static` `Var`:
+Composite reduction requires explicit type annotations on nested `cut_par`
+and `mu_par` calls:
 
 ```rust
-fn inner<'a>(outer: Var<'a, ()>) {
-    let _cmd = mu_neg_hrtb(|inner: Var<'_, ()>| {
-        cut(inner, outer)  // requires 'a: 'x for all 'x
-    });
-}
+cut_par::<'_, AtomP<A>, AtomP<B>, _>(
+    x,
+    mu_par::<'_, AtomP<A>, AtomP<B>, _>(|a1, b1| { ... })
+)
 ```
 
-**Error:** `lifetime may not live long enough — returning this value requires that 'a must outlive 'static`
+Rust's inference cannot work backward from `(Var, Var)` through associated
+type projections to infer `A` and `B` for the inner `mu_par`. This is a real
+ergonomic cost. Macro-based sugar is possible future work but not the current
+priority.
 
-The `for<'x>` quantifier is universal over **all** lifetimes, including
-`'static`. When the body captures `outer: Var<'a, ()>` and uses it where
-`Var<'x, ()>` is expected, Rust needs `'a: 'x` for all `'x`. Since `'x`
-includes `'static`, this requires `'a: 'static`. But `'a` is a generic lifetime
-parameter — it does not necessarily outlive `'static`.
+### `impl Trait` in variable bindings
 
-**This is a fundamental limit, not a workaround gap.** The first pass's
-`+ 'static` bound was not an over-constraint — it was the **necessary
-consequence** of combining HRTB with capture of lifetime-carrying data. You
-cannot have both universal lifetime freshness and non-`'static` capture of
-`Var` in Rust's type system.
+You cannot write `let e: impl Expr<'s, A> = ...`. You must rely on inference
+or return `impl Trait` from a function. This is a Rust syntax limitation.
 
-**The current design correctly chooses capture over HRTB.** Freshness is still
-guaranteed by value identity (each binder introduces a distinct `Var` value),
-which is enforced by move semantics. The lifetime `'s` is a scope marker, not
-an identity marker. Two binders at the same scope produce variables with the
-same lifetime type but distinct values — this is α-equivalence, and it is
-semantically correct.
+### `Par<A::Dual, B::Dual>: Neg` inference
 
-**Soundness check:** Can the specific-lifetime signature admit confused code?
-Tested multiple attack vectors:
-- Double use (`cut(x, x)`) — rejected by move semantics
-- Cross-binder reuse (same `Var` in two binder bodies) — rejected by move semantics
-- Parameter swap (using outer binder's variable where inner's is expected) —
-  compiles, but is semantically valid (α-equivalence)
-- Escape via Vec/RefCell — possible in principle if closures are invoked, but
-  irrelevant to static well-formedness
+Explicit `where A::Dual: Neg, B::Dual: Neg` bounds are still needed at use
+sites, even though they're theoretically implied by `A: Pos, B: Pos`. Rust's
+trait solver does not propagate this implication automatically.
 
-**Conclusion:** The weakening from HRTB to specific lifetime is **cosmetic,
-not semantic.** No ill-formed System L term can be constructed. Move semantics
-enforce linearity at the value level, which is the correct level of abstraction.
+## Test suite
 
-**Trade-off:** Top-level closed terms need explicit `'static` annotation
-(`mu_neg::<'static, AtomN<X>, _>(...)`). This is slightly more verbose but
-enables nesting.
+The test suite has 15 tests:
 
-### What still has friction
+- 9 static well-formedness tests (carried from earlier iterations)
+- 6 operational tests:
+  - `milestone_1_atomic_cut_reduces`
+  - `milestone_2_unit_cut_reduces`
+  - `milestone_3_tensor_par_atoms`
+  - `milestone_4_tensor_par_composites`
+  - `milestone_5_multi_step`
+  - `milestone_6_nested_binders`
 
-1. **`impl Trait` can't appear in variable bindings.** You can't write
-   `let e: impl Expr<'s, A> = ...`.  You must write `let e = ...` and rely on
-   inference, or return `impl Trait` from a function.  This is a Rust syntax
-   limitation, not a design flaw.
-
-2. **Type inference sometimes needs turbofish.** `tensor(x, y)` often needs
-   `tensor::<AtomP<X>, AtomP<Y>>(x, y)` because associated type projections
-   (`A::Value<'s>`) don't always provide enough inference hints.
-
-3. **`Par<A::Dual, B::Dual>: Neg` is not always inferred.** Explicit
-   `where A::Dual: Neg, B::Dual: Neg` bounds are still needed at use sites,
-   even though they're theoretically implied by `A: Pos, B: Pos`.
-
-4. **Composite-type reduction is still unimplemented.** The structural mismatch
-   between `Value<'s>` (pairs for tensors) and `Var<'s, A>` (expected by binder
-   bodies) remains.  This is a semantic issue, not a representation issue.
-   Phase 2 (continuation-based commands) may address it.
-
-## Comparison: first pass vs Option A
-
-| Aspect | First pass (enums) | Option A (traits) |
-|---|---|---|
-| `Box<dyn Any>` | Yes (for `MuPar`) | No |
-| Custom binder traits | Yes (`PosBinder`, `NegBinder`, `ParBinder`) | No |
-| `+ 'static` on closures | Yes | No |
-| Nested binders | No | Yes |
-| Enum variants | `Expr::Var`, `Expr::Val`, `Expr::MuPos` | `Var`, `()`, `(V, W)`, `MuPos` as separate types |
-| Type refinement | Runtime (`Any` downcast) | Compile-time (trait impls) |
-| `impl Trait` in bindings | N/A (concrete enum) | Not allowed (Rust limitation) |
-
-## Tests
-
-The test suite validates:
-
-- `atomic_axiom` — variable as both expression and co-expression
-- `unit_cut` — `⟨() | μ().c⟩`
-- `tensor_intro` — pair of atomic values
-- `mu_neg_binder` — negative μ with free covariable
-- `par_destructor` — `μ(x ⅋ y).c` using both variables
-- `nested_binders` — **the key milestone**: inner `mu_neg` captures outer `y`
-- `triple_nested` — three levels of nested binders
-- `tensor_par_cut` — full tensor/par cut composition
-- `duality_involution` — `A::Dual::Dual = A` compiles
-
-All 9 tests pass on stable Rust (2024 edition).
-
-## The strong vs weak form
-
-| Form | Claim | Status |
-|---|---|---|
-| **Strong** | Rust enforces all of System L's well-formedness, including type-level freshness via HRTB | **Unachievable** — HRTB + non-`'static` capture is incompatible |
-| **Weak** | Rust enforces scope safety and linearity; α-equivalence is maintained by value semantics | **Achieved** — the current library delivers this |
-
-The strong form was the original architectural bet. The investigation shows it
-fails not because of a missing workaround, but because of a fundamental tension
-in Rust's type system: universal quantification over lifetimes (`for<'x>`)
-requires captured lifetime-carrying data to outlive all quantified lifetimes,
-which forces `'static`.
-
-This is a **real finding** about Rust's type system. It says: Rust's lifetime
-system can carry scope structure and enforce linearity, but it cannot
-simultaneously provide universal freshness quantification and capture of
-non-`'static` scoped data. You must choose one. The library chooses capture
-(enabling nested binders) over HRTB freshness (which was cosmetic anyway,
-since freshness is already guaranteed by value identity).
-
-## Path forward
-
-**Phase 1 is complete and settled.** The HRTB question has been investigated
-and answered. The specific-lifetime design is sound, enables nested binders,
-and eliminates all enum-based workarounds.
-
-**Phase 2** (continuation-based commands, Option B from the memo) would layer
-operational semantics on top.  The idea is to make `Command<'s>` a closure that
-performs Krivine-style reduction when invoked.  Each `cut` would build a
-closure capturing the expression and co-expression; invoking the closure would
-apply the appropriate reduction rule.  Composite-type reduction would work
-because the closure has access to the full structure of its captured values.
-
-Whether to pursue Phase 2 depends on whether the goal is static well-formedness
-(achieved) or executable semantics (open question).
+All tests pass on stable Rust (2024 edition).
