@@ -43,5 +43,5 @@ pub use machine::{run, Command};
 pub use reduce::*;
 pub use types::*;
 
-#[cfg(test)]
-mod tests;
+// Unit tests are colocated in each module's #[cfg(test)] block.
+// Integration tests live in tests/*.rs.

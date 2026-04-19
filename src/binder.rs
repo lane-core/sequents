@@ -285,3 +285,47 @@ where
 {
     (v.producer)()
 }
+
+// =============================================================================
+// Unit tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Resource;
+
+    struct X;
+    struct Y;
+
+    #[test]
+    fn unit_constructor() {
+        let _u = unit();
+    }
+
+    #[test]
+    fn tensor_constructor() {
+        let x: Resource<'static, AtomP<X>> = Resource::new();
+        let y: Resource<'static, AtomP<Y>> = Resource::new();
+        let _pair = tensor(x, y);
+    }
+
+    #[test]
+    fn inl_constructor() {
+        let x: Resource<'static, AtomP<X>> = Resource::new();
+        let _v = inl::<AtomP<X>, AtomP<Y>>(x);
+    }
+
+    #[test]
+    fn inr_constructor() {
+        let y: Resource<'static, AtomP<Y>> = Resource::new();
+        let _v = inr::<AtomP<X>, AtomP<Y>>(y);
+    }
+
+    #[test]
+    fn promote_and_derelict() {
+        let bang = promote::<'static, AtomP<X>>(|| Term::Axiom(Resource::new()));
+        let _v1 = derelict(bang.clone());
+        let _v2 = derelict(bang);
+    }
+}

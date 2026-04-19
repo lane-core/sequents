@@ -1,4 +1,4 @@
-use super::*;
+use sequents::*;
 
 struct X;
 struct Y;
@@ -416,7 +416,7 @@ fn nested_binders_reduce() {
 }
 
 // ==========================================================================
-// Extension 2: Additive connectives
+// Additive connectives
 // ==========================================================================
 
 #[test]
@@ -464,7 +464,7 @@ fn plus_right_reduce() {
 }
 
 // ==========================================================================
-// Extension 3: Exponential connectives
+// Exponential connectives
 // ==========================================================================
 
 #[test]
@@ -564,7 +564,7 @@ fn exponential_composite() {
 }
 
 // ==========================================================================
-// Milestone 7: Canonical form / commuting conversion tests
+// Canonical form / commuting conversion tests
 // ==========================================================================
 
 /// Atomic commuting conversion: `⟨μα.c | μ̃x.d⟩` reduces.
@@ -666,7 +666,7 @@ fn cut_mu_bang_axiom() {
 }
 
 // ==========================================================================
-// M7: Canonical form production (explicit tests for Command::Normal / Step)
+// Canonical form production (explicit tests for Command::Normal / Step)
 // ==========================================================================
 
 /// Axiom vs Axiom produces Normal immediately.
