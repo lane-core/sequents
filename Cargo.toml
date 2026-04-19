@@ -9,5 +9,16 @@ repository = "https://git.sr.ht/~lane/sequents"
 documentation = "https://docs.rs/sequents"
 keywords = ["linear-logic", "sequent-calculus", "lambda-mu", "type-system"]
 categories = ["no-std", "science"]
+include = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "LICENSE",
+  "README.md",
+  ".gitignore",
+  "src/*.rs",
+  "tests/*.rs",
+  "docs/*.md",
+  "docs/*.bib",
+]
 
 [dependencies]
