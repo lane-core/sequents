@@ -15,7 +15,7 @@ pub mod reduce;
 pub mod types;
 
 pub use binder::*;
-pub use machine::{run, Command};
+pub use machine::{Command, run};
 pub use reduce::*;
 pub use types::*;
 
@@ -705,13 +705,18 @@ mod tests {
         assert!(matches!(cmd, Command::Normal));
     }
 
-    /// Axiom vs Elim (composite) produces Normal — blocked, no reduction.
+    /// Axiom vs Elim (composite) produces Step wrapping Normal — blocked.
     #[test]
     fn canonical_axiom_vs_elim_composite() {
         let x: Resource<'static, Tensor<AtomP<X>, AtomP<Y>>> = Resource::new();
         let coterm = mu_par::<'static, AtomP<X>, AtomP<Y>>(|_a, _b| Command::Normal);
         let cmd = cut(Term::Axiom(x), coterm);
-        assert!(matches!(cmd, Command::Normal));
+        assert!(
+            matches!(cmd, Command::Step(_)),
+            "axiom vs elim should produce a Step"
+        );
+        let outcome = run(cmd);
+        assert!(matches!(outcome, Command::Normal));
     }
 
     /// Intro vs Axiom produces Normal — blocked, no reduction.
@@ -725,12 +730,9 @@ mod tests {
         assert!(matches!(cmd, Command::Normal));
     }
 
-    /// Intro vs Elim (principal) reduces directly — no Step wrapper.
-    ///
-    /// Principal cuts invoke the elim body immediately; Step is only used
-    /// for commuting conversions and mu-binder dispatch.
+    /// Intro vs Elim (principal) produces Step, reducing on run.
     #[test]
-    fn canonical_intro_vs_elim_direct() {
+    fn canonical_intro_vs_elim_step() {
         let marker = std::rc::Rc::new(std::cell::Cell::new(false));
         let marker2 = marker.clone();
         let coterm = mu_unit(move || {
@@ -738,9 +740,16 @@ mod tests {
             Command::Normal
         });
         let cmd = cut(unit(), coterm);
-        // Principal cuts return Command directly — the body ran immediately.
+        // Step wrapper — body not yet executed.
+        assert!(
+            matches!(cmd, Command::Step(_)),
+            "principal cut should produce a Step"
+        );
+        assert!(!marker.get());
+        let outcome = run(cmd);
+        // After run, body executed and marker set.
         assert!(marker.get());
-        assert!(matches!(cmd, Command::Normal));
+        assert!(matches!(outcome, Command::Normal));
     }
 
     /// Mu vs anything produces Step.

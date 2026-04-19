@@ -15,7 +15,7 @@ where
         (Term::Axiom(_), Coterm::Axiom(_)) => Command::Normal,
 
         // Axiom vs Elim: variable substitution (non-trivial only for atoms).
-        (Term::Axiom(v), Coterm::Elim(e)) => e.axiom_elim(v),
+        (Term::Axiom(v), Coterm::Elim(e)) => Command::Step(Box::new(move || e.axiom_elim(v))),
 
         // Axiom vs MuTilde: commuting conversion — wrap axiom as term.
         (Term::Axiom(v), Coterm::MuTilde(f)) => Command::Step(Box::new(move || f(Term::Axiom(v)))),
@@ -24,7 +24,7 @@ where
         (Term::Intro(_), Coterm::Axiom(_)) => Command::Normal,
 
         // Intro vs Elim: principal cut (per-connective reduction).
-        (Term::Intro(i), Coterm::Elim(e)) => A::principal(i, e),
+        (Term::Intro(i), Coterm::Elim(e)) => Command::Step(Box::new(move || A::principal(i, e))),
 
         // Intro vs MuTilde: commuting conversion — wrap intro as term.
         (Term::Intro(i), Coterm::MuTilde(f)) => Command::Step(Box::new(move || f(Term::Intro(i)))),
