@@ -1,6 +1,6 @@
 # sequents
 
-Multiplicative-additive linear System L with exponentials, embedded in Rust's type system. Scope structure is carried by lifetimes; linearity is enforced by move semantics.
+A Rust embedding of linear classical System L. Formulas are types, proofs are programs, and cut-elimination is evaluation. Scope structure is carried by lifetimes; linearity is enforced by move semantics.
 
 This library implements the λμμ̃-calculus — classical sequent calculus as a programming language. Terms and coterms are symmetric three-variant enums. One `cut` function dispatches over the 3×3 pairing. Per-connective dispatch is handled by the `Interaction` and `Resolution` traits.
 
@@ -8,9 +8,12 @@ This library implements the λμμ̃-calculus — classical sequent calculus as 
 
 A research prototype, not a production library. It demonstrates that linear classical L can be expressed directly in a modern type system, with the operational semantics (Krivine-machine style) executable as Rust code.
 
-The key idea: formulas are types, proofs are programs, and cut-elimination is evaluation. The library makes this literal — `cut(term, coterm)` produces a `Command` that reduces step by step.
+## Quick start
 
-## Quick example
+```toml
+[dependencies]
+sequents = "0.1.0"
+```
 
 ```rust
 use sequents::*;
@@ -102,4 +105,4 @@ cargo test
 
 ## License
 
-MIT OR Apache-2.0
+BSD-3-Clause. Copyright (c) 2026, Lane Biocini.
