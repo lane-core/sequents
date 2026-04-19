@@ -97,7 +97,7 @@ mod tests {
     }
 
     #[test]
-    fn tensor_par_principal_cut() {
+    fn tensor_par_reduce_cut() {
         let x: Resource<'static, AtomP<X>> = Resource::new();
         let y: Resource<'static, AtomP<Y>> = Resource::new();
         let pair = tensor::<AtomP<X>, AtomP<Y>>(x, y);
@@ -157,7 +157,7 @@ mod tests {
 
     /// Tensor-par cut reduces for atoms.
     #[test]
-    fn tensor_par_principal_atoms() {
+    fn tensor_par_reduce_atoms() {
         let x: Resource<'static, AtomP<X>> = Resource::new();
         let y: Resource<'static, AtomP<Y>> = Resource::new();
 
@@ -178,7 +178,7 @@ mod tests {
 
     /// Tensor-par cut reduces for composites.
     #[test]
-    fn tensor_par_principal_composites() {
+    fn tensor_par_reduce_composites() {
         struct A;
         struct B;
         struct C;
@@ -321,7 +321,7 @@ mod tests {
         let _outcome = run(cmd);
     }
 
-    /// Mixed reduction: multiple commuting conversions composed with principal cuts.
+    /// Mixed reduction: multiple commuting conversions composed with reduce cuts.
     #[test]
     fn mixed_reduction() {
         let x1: Resource<'static, AtomP<X>> = Resource::new();
@@ -420,7 +420,7 @@ mod tests {
 
     /// Nested binders reduce correctly.
     #[test]
-    fn nested_binders_principal() {
+    fn nested_binders_reduce() {
         let x: Resource<'static, AtomP<X>> = Resource::new();
         let y: Resource<'static, AtomP<Y>> = Resource::new();
         let free: Resource<'static, AtomN<Y>> = Resource::new();
@@ -453,9 +453,9 @@ mod tests {
         check_neg::<With<AtomN<X>, AtomN<Y>>>();
     }
 
-    /// Principal cut with left injection: takes the left branch.
+    /// Reduction cut with left injection: takes the left branch.
     #[test]
-    fn plus_left_principal() {
+    fn plus_left_reduce() {
         let x: Resource<'static, AtomP<X>> = Resource::new();
         let m: Resource<'static, AtomN<X>> = Resource::new();
         let n: Resource<'static, AtomN<Y>> = Resource::new();
@@ -471,9 +471,9 @@ mod tests {
         assert!(matches!(outcome, Command::Normal));
     }
 
-    /// Principal cut with right injection: takes the right branch.
+    /// Reduction cut with right injection: takes the right branch.
     #[test]
-    fn plus_right_principal() {
+    fn plus_right_reduce() {
         let y: Resource<'static, AtomP<Y>> = Resource::new();
         let m: Resource<'static, AtomN<X>> = Resource::new();
         let n: Resource<'static, AtomN<Y>> = Resource::new();
@@ -730,7 +730,7 @@ mod tests {
         assert!(matches!(cmd, Command::Normal));
     }
 
-    /// Intro vs Elim (principal) produces Step, reducing on run.
+    /// Intro vs Elim (reduce) produces Step, reducing on run.
     #[test]
     fn canonical_intro_vs_elim_step() {
         let marker = std::rc::Rc::new(std::cell::Cell::new(false));
@@ -743,7 +743,7 @@ mod tests {
         // Step wrapper — body not yet executed.
         assert!(
             matches!(cmd, Command::Step(_)),
-            "principal cut should produce a Step"
+            "reduce cut should produce a Step"
         );
         assert!(!marker.get());
         let outcome = run(cmd);

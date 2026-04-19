@@ -92,27 +92,27 @@ pub trait Neg: Sized + 'static {
     /// The De Morgan dual — a positive type.
     type Dual: Pos<Dual = Self>;
     /// The concrete elimination form at scope `'s`.
-    type Elim<'s>: AxiomElim<'s, PosType = Self::Dual>;
+    type Elim<'s>: Substitution<'s, PosType = Self::Dual>;
 }
 
 // =============================================================================
-// 3.  Principal cut trait (pair-relation)
+// 3.  Reduction cut trait (pair-relation)
 // =============================================================================
 
-/// The principal cut rule for the positive connective `A` and its dual.
+/// The reduce cut rule for the positive connective `A` and its dual.
 ///
 /// This is a pair-relation between `A`'s intro forms and its dual's elim
 /// forms. The trait is placed on `Pos` for Rust's sake; it could
 /// equivalently be placed on `Neg`. The reduction itself is symmetric —
 /// either side describes the same rule.
-pub trait Principal: Pos
+pub trait Reduction: Pos
 where
     Self::Dual: Neg,
 {
-    /// Principal cut: intro form meets elim form. For atoms, unreachable
+    /// Reduction cut: intro form meets elim form. For atoms, unreachable
     /// (`match intro {}` on `Infallible`). For composites, destructures the
     /// intro and invokes the elim's body.
-    fn principal<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s>;
+    fn reduce<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s>;
 }
 
 // =============================================================================
@@ -124,9 +124,9 @@ where
 /// The reduction logic lives with the Elim because the Elim has the body.
 /// For atoms, the body receives the resource as a term.
 /// For composites, the interaction is blocked — returns `Normal`.
-pub trait AxiomElim<'s> {
+pub trait Substitution<'s> {
     type PosType: Pos;
-    fn axiom_elim(self, resource: Resource<'s, Self::PosType>) -> Command<'s>;
+    fn substitute(self, resource: Resource<'s, Self::PosType>) -> Command<'s>;
 }
 
 // =============================================================================
@@ -154,15 +154,15 @@ pub struct AtomElim<'s, X: 'static> {
     pub body: Box<dyn FnOnce(Term<'s, AtomP<X>>) -> Command<'s> + 's>,
 }
 
-impl<X: 'static> Principal for AtomP<X> {
-    fn principal<'s>(intro: Self::Intro<'s>, _elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+impl<X: 'static> Reduction for AtomP<X> {
+    fn reduce<'s>(intro: Self::Intro<'s>, _elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         match intro {}
     }
 }
 
-impl<'s, X: 'static> AxiomElim<'s> for AtomElim<'s, X> {
+impl<'s, X: 'static> Substitution<'s> for AtomElim<'s, X> {
     type PosType = AtomP<X>;
-    fn axiom_elim(self, resource: Resource<'s, AtomP<X>>) -> Command<'s> {
+    fn substitute(self, resource: Resource<'s, AtomP<X>>) -> Command<'s> {
         (self.body)(Term::Axiom(resource))
     }
 }
@@ -192,15 +192,15 @@ pub struct BotElim<'s> {
     pub body: Box<dyn FnOnce() -> Command<'s> + 's>,
 }
 
-impl Principal for One {
-    fn principal<'s>(_intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+impl Reduction for One {
+    fn reduce<'s>(_intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         (elim.body)()
     }
 }
 
-impl<'s> AxiomElim<'s> for BotElim<'s> {
+impl<'s> Substitution<'s> for BotElim<'s> {
     type PosType = One;
-    fn axiom_elim(self, _resource: Resource<'s, One>) -> Command<'s> {
+    fn substitute(self, _resource: Resource<'s, One>) -> Command<'s> {
         Command::Normal
     }
 }
@@ -238,24 +238,24 @@ pub struct ParElim<'s, A: Pos, B: Pos> {
     pub body: Box<dyn FnOnce(Term<'s, A>, Term<'s, B>) -> Command<'s> + 's>,
 }
 
-impl<A: Pos, B: Pos> Principal for Tensor<A, B>
+impl<A: Pos, B: Pos> Reduction for Tensor<A, B>
 where
     A::Dual: Neg,
     B::Dual: Neg,
 {
-    fn principal<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+    fn reduce<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         let (a, b) = intro;
         (elim.body)(a, b)
     }
 }
 
-impl<'s, A: Pos, B: Pos> AxiomElim<'s> for ParElim<'s, A, B>
+impl<'s, A: Pos, B: Pos> Substitution<'s> for ParElim<'s, A, B>
 where
     A::Dual: Neg,
     B::Dual: Neg,
 {
     type PosType = Tensor<A, B>;
-    fn axiom_elim(self, _resource: Resource<'s, Tensor<A, B>>) -> Command<'s> {
+    fn substitute(self, _resource: Resource<'s, Tensor<A, B>>) -> Command<'s> {
         Command::Normal
     }
 }
@@ -304,12 +304,12 @@ where
     pub right: Box<dyn FnOnce(Term<'s, B::Dual>) -> Command<'s> + 's>,
 }
 
-impl<A: Pos, B: Pos> Principal for Plus<A, B>
+impl<A: Pos, B: Pos> Reduction for Plus<A, B>
 where
     A::Dual: Neg,
     B::Dual: Neg,
 {
-    fn principal<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+    fn reduce<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         match intro {
             PlusIntro::Inl(a) => (elim.left)(a),
             PlusIntro::Inr(b) => (elim.right)(b),
@@ -317,13 +317,13 @@ where
     }
 }
 
-impl<'s, A: Neg, B: Neg> AxiomElim<'s> for WithElim<'s, A, B>
+impl<'s, A: Neg, B: Neg> Substitution<'s> for WithElim<'s, A, B>
 where
     A::Dual: Pos,
     B::Dual: Pos,
 {
     type PosType = Plus<A::Dual, B::Dual>;
-    fn axiom_elim(self, _resource: Resource<'s, Plus<A::Dual, B::Dual>>) -> Command<'s> {
+    fn substitute(self, _resource: Resource<'s, Plus<A::Dual, B::Dual>>) -> Command<'s> {
         Command::Normal
     }
 }
@@ -374,21 +374,21 @@ pub struct WhynotElim<'s, N: Neg> {
     pub body: Box<dyn FnOnce(BangIntro<'s, N::Dual>) -> Command<'s> + 's>,
 }
 
-impl<A: Pos> Principal for Bang<A>
+impl<A: Pos> Reduction for Bang<A>
 where
     A::Dual: Neg,
 {
-    fn principal<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+    fn reduce<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         (elim.body)(intro)
     }
 }
 
-impl<'s, N: Neg> AxiomElim<'s> for WhynotElim<'s, N>
+impl<'s, N: Neg> Substitution<'s> for WhynotElim<'s, N>
 where
     N::Dual: Pos,
 {
     type PosType = Bang<N::Dual>;
-    fn axiom_elim(self, _resource: Resource<'s, Bang<N::Dual>>) -> Command<'s> {
+    fn substitute(self, _resource: Resource<'s, Bang<N::Dual>>) -> Command<'s> {
         Command::Normal
     }
 }

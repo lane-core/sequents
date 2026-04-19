@@ -9,8 +9,8 @@ Restructure the sequents library so that `Term` and `Coterm` are symmetric three
 - `Term<'s, A>`: `Axiom(Resource)` / `Intro(A::Intro<'s>)` / `Mu(Box<dyn FnOnce(Coterm) -> Command>)`
 - `Coterm<'s, N>`: `Axiom(Resource)` / `Elim(N::Elim<'s>)` / `MuTilde(Box<dyn FnOnce(Term) -> Command>)`
 - One `cut` function with a 3×3 match
-- `Principal` trait for symmetric pair-relations (intro meets elim)
-- `AxiomElim` trait for elim-side resource consumption
+- `Reduction` trait for symmetric pair-relations (intro meets elim)
+- `Substitution` trait for elim-side resource consumption
 - All six binder types deleted, all thirteen cut functions collapsed
 - `Command` is now `Normal` / `Step(Box<dyn FnOnce() -> Command>)`
 
@@ -20,20 +20,20 @@ Restructure the sequents library so that `Term` and `Coterm` are symmetric three
 
 ### 1. GAT projection through duality fails in trait parameter position
 
-The original plan put `axiom_elim` on `Principal` alongside `principal`. Lane corrected this mid-refactor: `axiom_elim` belongs on the elim types, not on Pos. The corrected structure uses a new `AxiomElim<'s>` trait.
+The original plan put `axiom_elim` on `Principal` alongside `principal`. Lane corrected this mid-refactor: `axiom_elim` belongs on the elim types, not on Pos. The corrected structure uses a new `Substitution<'s>` trait.
 
 The first attempt at the corrected structure used a type parameter:
 
 ```rust
-pub trait AxiomElim<'s, A: Pos> {
-    fn axiom_elim(self, resource: Resource<'s, A>) -> Command<'s>;
+pub trait Substitution<'s, A: Pos> {
+    fn substitute(self, resource: Resource<'s, A>) -> Command<'s>;
 }
 ```
 
 This fails for composite types. Writing:
 
 ```rust
-impl<'s, A: Neg, B: Neg> AxiomElim<'s, Plus<A::Dual, B::Dual>> for WithElim<'s, A, B>
+impl<'s, A: Neg, B: Neg> Substitution<'s, Plus<A::Dual, B::Dual>> for WithElim<'s, A, B>
 ```
 
 the compiler cannot prove `Plus<A::Dual, B::Dual>: Pos` from `A: Neg, B: Neg` in the trait parameter position. The associated-type normalization `(A::Dual)::Dual = A` does not propagate there.
@@ -41,17 +41,17 @@ the compiler cannot prove `Plus<A::Dual, B::Dual>: Pos` from `A: Neg, B: Neg` in
 **Fix:** Restructure to an associated type:
 
 ```rust
-pub trait AxiomElim<'s> {
+pub trait Substitution<'s> {
     type PosType: Pos;
-    fn axiom_elim(self, resource: Resource<'s, Self::PosType>) -> Command<'s>;
+    fn substitute(self, resource: Resource<'s, Self::PosType>) -> Command<'s>;
 }
 ```
 
-Then the bound becomes `type Elim<'s>: AxiomElim<'s, PosType = Self::Dual>` on `Neg`. This compiles cleanly. The GAT + trait bound projection through duality works; the composite type in trait parameter position does not.
+Then the bound becomes `type Elim<'s>: Substitution<'s, PosType = Self::Dual>` on `Neg`. This compiles cleanly. The GAT + trait bound projection through duality works; the composite type in trait parameter position does not.
 
 ### 2. Callable fields need parentheses
 
-Elim structs like `ParElim` have `pub body: Box<dyn FnOnce(Term, Term) -> Command>`. Writing `k.body(a, b)` is parsed as a method call. Rust requires `(k.body)(a, b)`. This is a syntax-level detail that affects every elim call site in `Principal` impls and in tests that pattern-match on `Coterm::Elim`.
+Elim structs like `ParElim` have `pub body: Box<dyn FnOnce(Term, Term) -> Command>`. Writing `k.body(a, b)` is parsed as a method call. Rust requires `(k.body)(a, b)`. This is a syntax-level detail that affects every elim call site in `Reduction` impls and in tests that pattern-match on `Coterm::Elim`.
 
 This was unanticipated. The fix is mechanical but pervasive — about a dozen sites needed the parentheses.
 
@@ -70,21 +70,21 @@ The initial interpretation was that the asymmetry reflected a real operational d
 The corrected 3×3 match:
 
 - Axiom/Axiom → `Normal`
-- Axiom/Elim → `Step(Box::new(move || e.axiom_elim(v)))`
+- Axiom/Elim → `Step(Box::new(move || e.substitute(v)))`
 - Axiom/MuTilde → `Step(Box::new(...))`
 - Intro/Axiom → `Normal`
-- Intro/Elim → `Step(Box::new(move || A::principal(i, e)))`
+- Intro/Elim → `Step(Box::new(move || A::reduce(i, e)))`
 - Intro/MuTilde → `Step(Box::new(...))`
 - Mu/anything → `Step(Box::new(...))`
 
 Uniform: every non-terminal case produces `Step`. `run()` peels one layer per reduction. One `Box` allocation per reduction step — the physical trace of the event.
 
-### 5. `AxiomElim` as a separate trait is the right structural placement
+### 5. `Substitution` as a separate trait is the right structural placement
 
-Lane's mid-refactor correction — moving `axiom_elim` off `Principal` and onto elim types — proved correct in implementation. The two dispatch mechanisms in `cut` now match genuinely distinct cases:
+Lane's mid-refactor correction — moving `substitute` off `Reduction` and onto elim types — proved correct in implementation. The two dispatch mechanisms in `cut` now match genuinely distinct cases:
 
-- `e.axiom_elim(v)` — elim consumes resource (asymmetric, elim owns the logic)
-- `A::principal(i, e)` — symmetric pair-relation (neither side owns it)
+- `e.substitute(v)` — elim consumes resource (asymmetric, elim owns the logic)
+- `A::reduce(i, e)` — symmetric pair-relation (neither side owns it)
 
 Bundling them under one trait was algorithmic grouping, not structural observation. Splitting them keeps the refactor coherent with itself.
 
