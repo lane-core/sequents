@@ -1,73 +1,105 @@
 # sequents
 
-Linear classical L in Rust's type system.
+Multiplicative-additive linear System L with exponentials, embedded in Rust's type system. Scope structure is carried by lifetimes; linearity is enforced by move semantics.
 
-A research library embedding the multiplicative fragment of linear classical
-System L (Curien and Munch-Maccagnoni) into Rust. Scope structure is carried
-by lifetimes; linearity is enforced by move semantics. Terms are both statically
-well-formed by construction and operationally executable via continuation-based
-reduction.
+This library implements the λμμ̃-calculus — classical sequent calculus as a programming language. Terms and coterms are symmetric three-variant enums. One `cut` function dispatches over the 3×3 pairing. Per-connective reduction is handled by the `Reduction` and `Substitution` traits.
 
-## What it does
+## What this is
+
+A research prototype, not a production library. It demonstrates that linear classical L can be expressed directly in a modern type system, with the operational semantics (Krivine-machine style) executable as Rust code.
+
+The key idea: formulas are types, proofs are programs, and cut-elimination is evaluation. The library makes this literal — `cut(term, coterm)` produces a `Command` that reduces step by step.
+
+## Quick example
 
 ```rust
 use sequents::*;
 
-struct X;
+struct X; // atomic type
 
-// Axiom: ⟨x | x⊥⟩
-let x: Var<'static, AtomP<X>> = Var::new();
-let y: Var<'static, AtomN<X>> = Var::new();
-let cmd = cut(x, y);  // static well-formedness only
+let x: Resource<'static, AtomP<X>> = Resource::new();
+let y: Resource<'static, AtomN<X>> = Resource::new();
 
-// Operational reduction: ⟨x | μz⁻.⟨z | y⟩⟩ steps to ⟨x | y⟩
-let binder = mu_neg::<'static, AtomN<X>, _>(|z: Var<'_, AtomP<X>>| cut(z, y));
-let cmd = cut_atom(x, binder);
-let outcome = run(cmd);  // Stuck(StaticOnly) — normal form
+// Axiom cut: ⟨x | y⟩ — already in normal form
+let cmd = cut(x.into(), y.into());
+assert!(matches!(run(cmd), Command::Normal));
 ```
 
-## Architecture
+A reduction:
 
-- **Trait-based tagless-final:** `Expr<'s, A>` and `CoExpr<'s, N>` are marker
-traits, not enums. Each introduction form is its own type.
-- **Value-based binders:** Binder bodies receive `A::Value<'s>` (introduction
-forms), not `Var<'s, A>` (tokens). This makes composite-type reduction work
-recursively without a runtime environment.
-- **Continuation-based commands:** `Command<'s>` wraps `Box<dyn FnOnce()>`.
-Reduction is invocation. `run()` trampolines to a terminal state.
-- **Specific lifetimes:** Binder closures take concrete lifetimes, enabling
-capture of outer variables. Freshness is guaranteed by value identity
-(move semantics on non-Copy `Var` tokens).
+```rust
+let x: Resource<'static, AtomP<X>> = Resource::new();
+let z: Resource<'static, AtomN<X>> = Resource::new();
+
+// μ̃y.⟨y | z⟩ — a coterm that substitutes its argument into a cut with z
+let coterm = mu_tilde::<'static, AtomN<X>>(|y| cut(y, z.into()));
+
+// ⟨x | μ̃y.⟨y | z⟩⟩ reduces in one step to ⟨x | z⟩
+let cmd = cut(Term::Axiom(x), coterm);
+let outcome = run(cmd);
+assert!(matches!(outcome, Command::Normal));
+```
+
+Tensor and par:
+
+```rust
+struct Y;
+
+let x: Resource<'static, AtomP<X>> = Resource::new();
+let y: Resource<'static, AtomP<Y>> = Resource::new();
+let pair = tensor(x, y);
+
+let coterm = mu_par::<'static, AtomP<X>, AtomP<Y>>(|a, b| {
+    let m: Resource<'_, AtomN<X>> = Resource::new();
+    let n: Resource<'_, AtomN<Y>> = Resource::new();
+    let _ = cut(a, m.into());
+    cut(b, n.into())
+});
+
+let _cmd = cut(pair, coterm);
+```
+
+## Core concepts
+
+- **`Term<'s, A>`** — positive terms: axiom (variable), introduction (constructors), or μ-binder (control operator)
+- **`Coterm<'s, N>`** — negative coterms: axiom (covariable), elimination (destructors), or μ̃-binder (control operator)
+- **`cut(term, coterm)`** — pair a term with a coterm of dual type, producing a `Command`
+- **`Command<'s>`** — either `Normal` (canonical form) or `Step` (one reduction remaining)
+- **`run(cmd)`** — drive a command to normal form
+- **`Resource<'x, A>`** — a linear-use token. Non-`Copy`, non-`Clone`. Move semantics enforce single use.
 
 ## Connectives
 
-| Type | Polarity | Value |
-|---|---|---|
-| `AtomP<X>` | Positive | `Var<'s, AtomP<X>>` |
-| `AtomN<X>` | Negative | `Var<'s, AtomN<X>>` |
-| `One` | Positive | `()` |
-| `Bot` | Negative | (no constructor) |
-| `Tensor<A, B>` | Positive | `(A::Value, B::Value)` |
-| `Par<A, B>` | Negative | (no constructor) |
+| Positive | Negative | Description |
+|----------|----------|-------------|
+| `AtomP<X>` | `AtomN<X>` | Atomic types |
+| `One` | `Bot` | Multiplicative unit (⊥) |
+| `Tensor<A, B>` | `Par<A, B>` | Multiplicative conjunction/disjunction (⊗/⅋) |
+| `Plus<A, B>` | `With<A, B>` | Additive disjunction/conjunction (⊕/&) |
+| `Bang<A>` | `Whynot<N>` | Exponential modality (!/?) |
 
-## Reduction functions
+## Documentation
 
-- `cut(v, co)` — generic cut, static well-formedness only (stuck at runtime)
-- `cut_atom(v, binder)` — atomic cut reduction
-- `cut_unit(v, binder)` — unit cut reduction
-- `cut_par(v, binder)` — tensor-par cut reduction (handles composites)
-- `run(cmd)` — drive a command to `Done` or `Stuck`
+Run `cargo doc --open` for full API documentation. Every public item has a doc comment explaining its theoretical basis.
 
-## Running tests
+Citations: `docs/CITATIONS.md`.
 
-```bash
+## References
+
+- **MMM** — Mangel, Melliès, Munch-Maccagnoni. "Classical Notions of Computation and the Hasegawa–Thielecke Theorem." POPL 2026.
+- **Spiwack** — Spiwack, Arnaud. "A Dissection of L." 2014.
+- **Grokking** — Binder et al. "Grokking the Sequent Calculus." ICFP 2024.
+
+See `docs/CITATIONS.md` for full bibliographic details.
+
+## Tests
+
+```
 cargo test
 ```
 
-15 tests, all passing on stable Rust (2024 edition).
+46 tests covering structural typing, operational reduction, commuting conversions, and canonical form production.
 
-## Further reading
+## License
 
-See `NOTES.md` for the full architectural account, including the HRTB-vs-
-capture finding, the value-based binder design rationale, and documented
-ergonomic costs.
+MIT OR Apache-2.0
