@@ -95,10 +95,7 @@ pub fn mu_atom<'s, X: 'static>(
 /// Bottom elimination: `μ̃().c`.
 ///
 /// Builds a `Coterm::Elim(BotElim { body })`.
-pub fn mu_unit<'s, F>(body: F) -> Coterm<'s, Bot>
-where
-    F: FnOnce() -> Command<'s> + 's,
-{
+pub fn mu_unit<'s>(body: impl FnOnce() -> Command<'s> + 's) -> Coterm<'s, Bot> {
     Coterm::Elim(BotElim {
         body: Box::new(body),
     })
@@ -107,11 +104,12 @@ where
 /// Par elimination: `μ̃(x ⅋ y).c`.
 ///
 /// Builds a `Coterm::Elim(ParElim { body })`.
-pub fn mu_par<'s, A: Pos, B: Pos, F>(body: F) -> Coterm<'s, Par<A::Dual, B::Dual>>
+pub fn mu_par<'s, A: Pos, B: Pos>(
+    body: impl FnOnce(Term<'s, A>, Term<'s, B>) -> Command<'s> + 's,
+) -> Coterm<'s, Par<A::Dual, B::Dual>>
 where
     A::Dual: Neg,
     B::Dual: Neg,
-    F: FnOnce(Term<'s, A>, Term<'s, B>) -> Command<'s> + 's,
 {
     Coterm::Elim(ParElim {
         body: Box::new(body),
@@ -121,15 +119,13 @@ where
 /// Case elimination: `μ̃case(x ⇒ c₁, y ⇒ c₂)`.
 ///
 /// Builds a `Coterm::Elim(WithElim { left, right })`.
-pub fn mu_case<'s, A: Pos, B: Pos, F1, F2>(
-    body_left: F1,
-    body_right: F2,
+pub fn mu_case<'s, A: Pos, B: Pos>(
+    body_left: impl FnOnce(Term<'s, A>) -> Command<'s> + 's,
+    body_right: impl FnOnce(Term<'s, B>) -> Command<'s> + 's,
 ) -> Coterm<'s, With<A::Dual, B::Dual>>
 where
     A::Dual: Neg,
     B::Dual: Neg,
-    F1: FnOnce(Term<'s, A>) -> Command<'s> + 's,
-    F2: FnOnce(Term<'s, B>) -> Command<'s> + 's,
 {
     Coterm::Elim(WithElim {
         left: Box::new(body_left),
@@ -140,10 +136,11 @@ where
 /// Exponential elimination: `μ̃!x.c`.
 ///
 /// Builds a `Coterm::Elim(WhynotElim { body })`.
-pub fn mu_bang<'s, A: Pos, F>(body: F) -> Coterm<'s, Whynot<A::Dual>>
+pub fn mu_bang<'s, A: Pos>(
+    body: impl FnOnce(BangIntro<'s, A>) -> Command<'s> + 's,
+) -> Coterm<'s, Whynot<A::Dual>>
 where
     A::Dual: Neg,
-    F: FnOnce(BangIntro<'s, A>) -> Command<'s> + 's,
 {
     Coterm::Elim(WhynotElim {
         body: Box::new(body),
@@ -160,10 +157,9 @@ where
 /// number of times, each time yielding a fresh linear term. The producer
 /// must be closed (no free linear variables) — this is enforced by Rust's
 /// move semantics on the closure.
-pub fn promote<'s, A: Pos, F>(producer: F) -> BangIntro<'s, A>
+pub fn promote<'s, A: Pos>(producer: impl Fn() -> Term<'s, A> + 's) -> BangIntro<'s, A>
 where
     A::Dual: Neg,
-    F: Fn() -> Term<'s, A> + 's,
 {
     BangIntro {
         producer: std::rc::Rc::new(producer),

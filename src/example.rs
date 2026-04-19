@@ -31,7 +31,7 @@ fn example_tensor() {
 }
 
 fn example_par() {
-    let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
+    let _co = mu_par::<'static, AtomP<X>, AtomP<Y>>(|x, y| {
         let a: Resource<'_, AtomN<X>> = Resource::new();
         let b: Resource<'_, AtomN<Y>> = Resource::new();
         let cmd_x = cut(x, a.into());
@@ -44,7 +44,7 @@ fn example_nested_binders() {
     // μ̃(x ⅋ y).⟨x | μ̃z.⟨y | w⟩⟩
     let _w: Resource<'static, AtomN<Y>> = Resource::new();
 
-    let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
+    let _co = mu_par::<'static, AtomP<X>, AtomP<Y>>(|x, y| {
         cut(
             x,
             mu_tilde::<'_, AtomN<X>>(|_z: Term<'_, AtomP<X>>| cut(y, _w.into())),
@@ -63,7 +63,7 @@ fn example_tensor_par_principal() {
     let y: Resource<'static, AtomP<Y>> = Resource::new();
     let pair = tensor(x, y);
 
-    let co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|a, b| {
+    let co = mu_par::<'static, AtomP<X>, AtomP<Y>>(|a, b| {
         let m: Resource<'_, AtomN<X>> = Resource::new();
         let n: Resource<'_, AtomN<Y>> = Resource::new();
         let cmd1 = cut(a, m.into());
@@ -110,13 +110,13 @@ fn example_composite_reduction() {
     let pair = tensor(tensor(a, b), tensor(c, d));
 
     let coterm =
-        mu_par::<'static, Tensor<AtomP<A>, AtomP<B>>, Tensor<AtomP<C>, AtomP<D>>, _>(|x, y| {
+        mu_par::<'static, Tensor<AtomP<A>, AtomP<B>>, Tensor<AtomP<C>, AtomP<D>>>(|x, y| {
             cut(
                 x,
-                mu_par::<'_, AtomP<A>, AtomP<B>, _>(|_a1, _b1| {
+                mu_par::<'_, AtomP<A>, AtomP<B>>(|_a1, _b1| {
                     cut(
                         y,
-                        mu_par::<'_, AtomP<C>, AtomP<D>, _>(|_c1, _d1| Command::Normal),
+                        mu_par::<'_, AtomP<C>, AtomP<D>>(|_c1, _d1| Command::Normal),
                     )
                 }),
             )
@@ -132,9 +132,7 @@ fn example_multi_step() {
 
     let cmd = cut(
         Term::Axiom(x),
-        mu_tilde::<'static, AtomN<X>>(|y| {
-            cut(y, mu_tilde::<'_, AtomN<X>>(|z| cut(z.into(), w.into())))
-        }),
+        mu_tilde::<'static, AtomN<X>>(|y| cut(y, mu_tilde::<'_, AtomN<X>>(|z| cut(z, w.into())))),
     );
 
     // Reduces in two steps to cut(x, w), then Normal.
@@ -170,7 +168,7 @@ fn example_additive_left() {
     let n: Resource<'static, AtomN<Y>> = Resource::new();
 
     let val = inl::<AtomP<X>, AtomP<Y>>(x);
-    let coterm = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+    let coterm = mu_case::<'static, AtomP<X>, AtomP<Y>>(
         |a| cut(a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into()))),
         |_b| cut(_b, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into()))),
     );
@@ -185,7 +183,7 @@ fn example_additive_right() {
     let n: Resource<'static, AtomN<Y>> = Resource::new();
 
     let val = inr::<AtomP<X>, AtomP<Y>>(y);
-    let coterm = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+    let coterm = mu_case::<'static, AtomP<X>, AtomP<Y>>(
         |_a| cut(_a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into()))),
         |b| cut(b, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into()))),
     );

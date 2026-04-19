@@ -15,7 +15,7 @@ pub mod reduce;
 pub mod types;
 
 pub use binder::*;
-pub use machine::{Command, run};
+pub use machine::{run, Command};
 pub use reduce::*;
 pub use types::*;
 
@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn par_destructor() {
-        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
+        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>>(|x, y| {
             let a: Resource<'_, AtomN<X>> = Resource::new();
             let b: Resource<'_, AtomN<Y>> = Resource::new();
             let cmd1 = cut(x, a.into());
@@ -68,7 +68,7 @@ mod tests {
     fn nested_binders() {
         let _w: Resource<'static, AtomN<Y>> = Resource::new();
 
-        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
+        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>>(|x, y| {
             cut(
                 x,
                 mu_tilde::<'_, AtomN<X>>(|_z: Term<'_, AtomP<X>>| cut(y, _w.into())),
@@ -80,7 +80,7 @@ mod tests {
     fn triple_nested() {
         let _w: Resource<'static, AtomN<Y>> = Resource::new();
 
-        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|x, y| {
+        let _co = mu_par::<'static, AtomP<X>, AtomP<Y>>(|x, y| {
             cut(
                 x,
                 mu_tilde::<'_, AtomN<X>>(|_z| {
@@ -102,7 +102,7 @@ mod tests {
         let y: Resource<'static, AtomP<Y>> = Resource::new();
         let pair = tensor::<AtomP<X>, AtomP<Y>>(x, y);
 
-        let co = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|a, b| {
+        let co = mu_par::<'static, AtomP<X>, AtomP<Y>>(|a, b| {
             let m: Resource<'_, AtomN<X>> = Resource::new();
             let n: Resource<'_, AtomN<Y>> = Resource::new();
             let cmd1 = cut(a, m.into());
@@ -164,7 +164,7 @@ mod tests {
         let m: Resource<'static, AtomN<X>> = Resource::new();
         let n: Resource<'static, AtomN<Y>> = Resource::new();
 
-        let coterm = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|a, b| {
+        let coterm = mu_par::<'static, AtomP<X>, AtomP<Y>>(|a, b| {
             let cmd1 = cut(a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into())));
             let _ = cmd1;
             cut(b, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into())))
@@ -197,13 +197,13 @@ mod tests {
         let pair = tensor(tensor(a, b), tensor(c, d));
 
         let coterm =
-            mu_par::<'static, Tensor<AtomP<A>, AtomP<B>>, Tensor<AtomP<C>, AtomP<D>>, _>(|x, y| {
+            mu_par::<'static, Tensor<AtomP<A>, AtomP<B>>, Tensor<AtomP<C>, AtomP<D>>>(|x, y| {
                 cut(
                     x,
-                    mu_par::<'_, AtomP<A>, AtomP<B>, _>(|a1, b1| {
+                    mu_par::<'_, AtomP<A>, AtomP<B>>(|a1, b1| {
                         cut(
                             y,
-                            mu_par::<'_, AtomP<C>, AtomP<D>, _>(|c1, d1| {
+                            mu_par::<'_, AtomP<C>, AtomP<D>>(|c1, d1| {
                                 let _ = cut(a1, mu_tilde::<'_, AtomN<A>>(|v| cut(v, m.into())));
                                 let _ = cut(b1, mu_tilde::<'_, AtomN<B>>(|v| cut(v, n.into())));
                                 let _ = cut(c1, mu_tilde::<'_, AtomN<C>>(|v| cut(v, p.into())));
@@ -251,7 +251,7 @@ mod tests {
                     Coterm::MuTilde(_) => panic!("mu_tilde in commuting"),
                 }
             });
-        let neg = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|a, b| {
+        let neg = mu_par::<'static, AtomP<X>, AtomP<Y>>(|a, b| {
             let cmd1 = cut(a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into())));
             let _ = cmd1;
             cut(b, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into())))
@@ -272,7 +272,7 @@ mod tests {
             Coterm::Axiom(_) => panic!("axiom in commuting"),
             Coterm::MuTilde(_) => panic!("mu_tilde in commuting"),
         });
-        let neg = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+        let neg = mu_case::<'static, AtomP<X>, AtomP<Y>>(
             |a| cut(a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into()))),
             |_b| cut(_b, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into()))),
         );
@@ -293,7 +293,7 @@ mod tests {
             Coterm::Axiom(_) => panic!("axiom in commuting"),
             Coterm::MuTilde(_) => panic!("mu_tilde in commuting"),
         });
-        let neg = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+        let neg = mu_case::<'static, AtomP<X>, AtomP<Y>>(
             |_a| cut(_a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into()))),
             |b| cut(b, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into()))),
         );
@@ -305,7 +305,7 @@ mod tests {
     /// Bang/whynot commuting conversion: `⟨μα.c | μ̃!x.d⟩` reduces.
     #[test]
     fn commuting_bang_whynot() {
-        let bang = promote::<'static, AtomP<X>, _>(|| Term::Axiom(Resource::new()));
+        let bang = promote::<'static, AtomP<X>>(|| Term::Axiom(Resource::new()));
         let m: Resource<'static, AtomN<X>> = Resource::new();
 
         let pos = mu::<'static, Bang<AtomP<X>>>(move |a| match a {
@@ -313,7 +313,7 @@ mod tests {
             Coterm::Axiom(_) => panic!("axiom in commuting"),
             Coterm::MuTilde(_) => panic!("mu_tilde in commuting"),
         });
-        let neg = mu_bang::<'static, AtomP<X>, _>(|b| {
+        let neg = mu_bang::<'static, AtomP<X>>(|b| {
             let v = derelict(b);
             cut(v, m.into())
         });
@@ -334,7 +334,7 @@ mod tests {
             Coterm::Axiom(_) => panic!("axiom in commuting"),
             Coterm::MuTilde(_) => panic!("mu_tilde in commuting"),
         });
-        let neg2 = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+        let neg2 = mu_case::<'static, AtomP<X>, AtomP<Y>>(
             |a| cut(a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into()))),
             |_b| panic!("wrong branch"),
         );
@@ -344,7 +344,7 @@ mod tests {
             Coterm::Axiom(_) => panic!("axiom in commuting"),
             Coterm::MuTilde(_) => panic!("mu_tilde in commuting"),
         });
-        let neg = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|_a, _b| cut(pos2, neg2));
+        let neg = mu_par::<'static, AtomP<X>, AtomP<Y>>(|_a, _b| cut(pos2, neg2));
         let cmd = cut(pos, neg);
         let outcome = run(cmd);
         assert!(matches!(outcome, Command::Normal));
@@ -365,10 +365,10 @@ mod tests {
             Coterm::Axiom(_) => panic!("axiom in commuting"),
             Coterm::MuTilde(_) => panic!("mu_tilde in commuting"),
         });
-        let neg = mu_par::<'static, Tensor<AtomP<X>, AtomP<Y>>, One, _>(|a, _b| {
+        let neg = mu_par::<'static, Tensor<AtomP<X>, AtomP<Y>>, One>(|a, _b| {
             cut(
                 a,
-                mu_par::<'_, AtomP<X>, AtomP<Y>, _>(|a1, b1| {
+                mu_par::<'_, AtomP<X>, AtomP<Y>>(|a1, b1| {
                     let cmd1 = cut(a1, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into())));
                     let _ = cmd1;
                     cut(b1, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into())))
@@ -427,7 +427,7 @@ mod tests {
 
         let cmd = cut(
             tensor(x, y),
-            mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|a, b| {
+            mu_par::<'static, AtomP<X>, AtomP<Y>>(|a, b| {
                 cut(
                     a,
                     mu_tilde::<'_, AtomN<X>>(|_z| {
@@ -461,7 +461,7 @@ mod tests {
         let n: Resource<'static, AtomN<Y>> = Resource::new();
 
         let val = inl::<AtomP<X>, AtomP<Y>>(x);
-        let coterm = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+        let coterm = mu_case::<'static, AtomP<X>, AtomP<Y>>(
             |a| cut(a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into()))),
             |_b| cut(_b, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into()))),
         );
@@ -479,7 +479,7 @@ mod tests {
         let n: Resource<'static, AtomN<Y>> = Resource::new();
 
         let val = inr::<AtomP<X>, AtomP<Y>>(y);
-        let coterm = mu_case::<'static, AtomP<X>, AtomP<Y>, _, _>(
+        let coterm = mu_case::<'static, AtomP<X>, AtomP<Y>>(
             |_a| cut(_a, mu_tilde::<'_, AtomN<X>>(|v| cut(v, m.into()))),
             |b| cut(b, mu_tilde::<'_, AtomN<Y>>(|v| cut(v, n.into()))),
         );
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn exponential_bang_value_clone() {
-        let bang = promote::<'static, AtomP<X>, _>(|| Term::Axiom(Resource::new()));
+        let bang = promote::<'static, AtomP<X>>(|| Term::Axiom(Resource::new()));
         let _clone = bang.clone();
     }
 
@@ -523,8 +523,8 @@ mod tests {
     /// Exponential cut — body receives BangIntro and can use it zero times (weakening).
     #[test]
     fn exponential_cut_weakening() {
-        let bang = promote::<'static, AtomP<X>, _>(|| Term::Axiom(Resource::new()));
-        let coterm = mu_bang::<'static, AtomP<X>, _>(|_b: BangIntro<'_, AtomP<X>>| Command::Normal);
+        let bang = promote::<'static, AtomP<X>>(|| Term::Axiom(Resource::new()));
+        let coterm = mu_bang::<'static, AtomP<X>>(|_b: BangIntro<'_, AtomP<X>>| Command::Normal);
         let cmd = cut(Term::<Bang<AtomP<X>>>::Intro(bang), coterm);
         let outcome = run(cmd);
         assert!(matches!(outcome, Command::Normal));
@@ -533,8 +533,8 @@ mod tests {
     #[test]
     fn exponential_cut_single_use() {
         let z: Resource<'static, AtomN<X>> = Resource::new();
-        let bang = promote::<'static, AtomP<X>, _>(|| Term::Axiom(Resource::new()));
-        let coterm = mu_bang::<'static, AtomP<X>, _>(|b: BangIntro<'_, AtomP<X>>| {
+        let bang = promote::<'static, AtomP<X>>(|| Term::Axiom(Resource::new()));
+        let coterm = mu_bang::<'static, AtomP<X>>(|b: BangIntro<'_, AtomP<X>>| {
             let v = derelict(b);
             cut(v, z.into())
         });
@@ -546,8 +546,8 @@ mod tests {
     fn exponential_cut_contraction() {
         let z1: Resource<'static, AtomN<X>> = Resource::new();
         let z2: Resource<'static, AtomN<X>> = Resource::new();
-        let bang = promote::<'static, AtomP<X>, _>(|| Term::Axiom(Resource::new()));
-        let coterm = mu_bang::<'static, AtomP<X>, _>(|b: BangIntro<'_, AtomP<X>>| {
+        let bang = promote::<'static, AtomP<X>>(|| Term::Axiom(Resource::new()));
+        let coterm = mu_bang::<'static, AtomP<X>>(|b: BangIntro<'_, AtomP<X>>| {
             let v1 = derelict(b.clone());
             let v2 = derelict(b);
             let cmd1 = cut(v1, z1.into());
@@ -564,16 +564,16 @@ mod tests {
         let z: Resource<'static, AtomN<X>> = Resource::new();
         let w: Resource<'static, AtomN<Y>> = Resource::new();
 
-        let bang = promote::<'static, Tensor<AtomP<X>, AtomP<Y>>, _>(|| {
+        let bang = promote::<'static, Tensor<AtomP<X>, AtomP<Y>>>(|| {
             Term::Intro((Term::Axiom(Resource::new()), Term::Axiom(Resource::new())))
         });
 
-        let coterm = mu_bang::<'static, Tensor<AtomP<X>, AtomP<Y>>, _>(
+        let coterm = mu_bang::<'static, Tensor<AtomP<X>, AtomP<Y>>>(
             |b: BangIntro<'_, Tensor<AtomP<X>, AtomP<Y>>>| {
                 let pair = derelict(b);
                 cut(
                     pair,
-                    mu_par::<'_, AtomP<X>, AtomP<Y>, _>(|a, b_val| {
+                    mu_par::<'_, AtomP<X>, AtomP<Y>>(|a, b_val| {
                         let cmd1 = cut(a, z.into());
                         let _ = cmd1;
                         cut(b_val, w.into())
@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn canonical_axiom_vs_elim_composite() {
         let x: Resource<'static, Tensor<AtomP<X>, AtomP<Y>>> = Resource::new();
-        let coterm = mu_par::<'static, AtomP<X>, AtomP<Y>, _>(|_a, _b| Command::Normal);
+        let coterm = mu_par::<'static, AtomP<X>, AtomP<Y>>(|_a, _b| Command::Normal);
         let cmd = cut(Term::Axiom(x), coterm);
         assert!(matches!(cmd, Command::Normal));
     }
