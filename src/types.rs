@@ -55,7 +55,7 @@ impl<'x, A> Default for Resource<'x, A> {
 
 /// A positive term at scope `'s`.
 ///
-/// In the λμμ̃-calculus, positive terms are the data side of the
+/// In the λμ̃μ-calculus, positive terms are the data side of the
 /// duality. Three variants, symmetric with [`Coterm`] under De Morgan
 /// duality:
 ///
@@ -90,7 +90,7 @@ pub enum Term<'s, A: Positive> {
 
 /// A negative coterm at scope `'s`.
 ///
-/// In the λμμ̃-calculus, negative coterms are the codata side of the
+/// In the λμ̃μ-calculus, negative coterms are the codata side of the
 /// duality. Three variants, symmetric with [`Term`] under De Morgan
 /// duality:
 ///
@@ -219,7 +219,10 @@ where
     /// Perform the interaction: destructure the intro and invoke the elim's
     /// body with the resulting components. For atoms, unreachable
     /// (`match intro {}` on `Infallible`), since atoms have no intro form.
-    fn interact<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Negative>::Elim<'s>) -> Command<'s>;
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s>;
 }
 
 // =============================================================================
@@ -294,7 +297,10 @@ pub struct AtomElim<'s, X: 'static> {
 }
 
 impl<X: 'static> Interaction for AtomP<X> {
-    fn interact<'s>(intro: Self::Intro<'s>, _elim: <Self::Dual as Negative>::Elim<'s>) -> Command<'s> {
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        _elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s> {
         match intro {}
     }
 }
@@ -347,7 +353,10 @@ pub struct BotElim<'s> {
 }
 
 impl Interaction for One {
-    fn interact<'s>(_intro: Self::Intro<'s>, elim: <Self::Dual as Negative>::Elim<'s>) -> Command<'s> {
+    fn interact<'s>(
+        _intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s> {
         (elim.body)()
     }
 }
@@ -417,7 +426,10 @@ where
     A::Dual: Negative,
     B::Dual: Negative,
 {
-    fn interact<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Negative>::Elim<'s>) -> Command<'s> {
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s> {
         let (a, b) = intro;
         (elim.body)(a, b)
     }
@@ -510,7 +522,10 @@ where
     A::Dual: Negative,
     B::Dual: Negative,
 {
-    fn interact<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Negative>::Elim<'s>) -> Command<'s> {
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s> {
         match intro {
             PlusIntro::Inl(a) => (elim.left)(a),
             PlusIntro::Inr(b) => (elim.right)(b),
@@ -608,7 +623,10 @@ impl<A: Positive> Interaction for Bang<A>
 where
     A::Dual: Negative,
 {
-    fn interact<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Negative>::Elim<'s>) -> Command<'s> {
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s> {
         (elim.body)(intro)
     }
 }

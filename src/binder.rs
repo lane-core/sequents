@@ -13,7 +13,7 @@ use crate::types::{
 /// μ-binder constructor: `μα.c` on the positive side.
 ///
 /// Builds a [`Term::Mu`] — a general continuation that receives a coterm
-/// of the dual type. In the λμμ̃-calculus, `μα.c` binds a covariable
+/// of the dual type. In the λμ̃μ-calculus, `μα.c` binds a covariable
 /// `α` and captures the current evaluation context as a first-class
 /// object `Grokking §3.2].
 ///
@@ -28,7 +28,9 @@ use crate::types::{
 ///     cut(Term::Axiom(x), a)
 /// });
 /// ```
-pub fn mu<'s, A: Positive>(body: impl FnOnce(Coterm<'s, A::Dual>) -> Command<'s> + 's) -> Term<'s, A>
+pub fn mu<'s, A: Positive>(
+    body: impl FnOnce(Coterm<'s, A::Dual>) -> Command<'s> + 's,
+) -> Term<'s, A>
 where
     A::Dual: Negative,
 {
@@ -38,7 +40,7 @@ where
 /// μ̃-binder constructor: `μ̃x.c` on the negative side.
 ///
 /// Builds a [`Coterm::MuTilde`] — a general continuation that receives a
-/// term of the dual type. In the λμμ̃-calculus, `μ̃x.c` binds a variable
+/// term of the dual type. In the λμ̃μ-calculus, `μ̃x.c` binds a variable
 /// `x` and captures the current term as a first-class object
 /// `Grokking §3.2].
 ///

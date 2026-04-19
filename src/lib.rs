@@ -4,7 +4,7 @@
 //! with exponentials into Rust's type system.
 //!
 //! Scope structure is carried by lifetimes; linearity is enforced by move
-//! semantics. The library implements the λμμ̃-calculus (see `Grokking`) with
+//! semantics. The library implements the λμ̃μ-calculus (see `Grokking`) with
 //! symmetric three-variant [`Term`] and [`Coterm`] enums, a single [`cut`]
 //! function dispatching over the 3×3 pairing, and per-connective reduction
 //! via the [`Interaction`] and [`Resolution`] traits.

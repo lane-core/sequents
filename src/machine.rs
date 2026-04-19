@@ -1,6 +1,6 @@
 /// A command `c : (⊢ Γ)` at scope `'s`.
 ///
-/// In the λμμ̃-calculus, a command is the result of cutting a term
+/// In the λμ̃μ-calculus, a command is the result of cutting a term
 /// against a coterm. Commands are not values — they are computations
 /// that reduce. This enum represents the two possible states of a
 /// command:
