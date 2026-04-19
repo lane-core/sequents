@@ -172,8 +172,8 @@ pub trait Pos: Sized + 'static {
 /// The [`Neg::Dual`] associated type computes the De Morgan dual.
 /// The duality is involutive: `<N as Neg>::Dual::Dual = N`.
 ///
-/// Every elim type must implement [`Substitution`] — the elim-side
-/// dispatch for axiom-elim interactions. See [`Substitution`] for
+/// Every elim type must implement [`Resolution`] — the elim-side
+/// dispatch for axiom-elim interactions. See [`Resolution`] for
 /// why this lives on the elim rather than on the positive type.
 pub trait Neg: Sized + 'static {
     /// The De Morgan dual — a positive type.
@@ -182,76 +182,75 @@ pub trait Neg: Sized + 'static {
     ///
     /// Each elim type carries the body of a destructor: a closure
     /// that consumes the components introduced by the dual positive
-    /// connective. The elim must implement [`Substitution`] so that
+    /// connective. The elim must implement [`Resolution`] so that
     /// `cut` can dispatch axiom-elim interactions elim-side.
-    type Elim<'s>: Substitution<'s, PosType = Self::Dual>;
+    type Elim<'s>: Resolution<'s, PosType = Self::Dual>;
 }
 
 // =============================================================================
-// 3.  Structural β-reduction (pair-relation trait)
+// 3.  Interaction (pair-relation trait)
 // =============================================================================
 
-/// Structural β-reduction for a positive connective and its dual.
+/// The interaction rule for the positive connective `A` and its dual.
 ///
-/// This trait implements the *principal cut* rule: when an introduction
-/// form meets its dual's elimination form, the β-rule for that connective
-/// fires. For example, at tensor/par, the pair is destructured and its
-/// components are passed to the par's body `MMM §7, rule (R⊗)].
+/// An interaction is a symmetric active-pair event: `A`'s intro form meets its
+/// dual's elim form, and the β-rule for the connective fires. Both participants
+/// are structurally active and contribute to the reduction; the event is
+/// symmetric in the sense that neither side owns the logic — the rule is a
+/// pair-relation.
 ///
-/// The trait is placed on [`Pos`] for Rust's sake; the reduction itself
-/// is a symmetric pair-relation between intro and elim forms, and could
-/// equivalently be placed on [`Neg`] [Spiwack, module `Reduction`].
+/// The trait is placed on [`Pos`] for Rust's sake; it could equivalently be
+/// placed on [`Neg`], since interaction is a property of the connective pair
+/// rather than of either polarity alone [Spiwack, module `Reduction`].
 ///
-/// Each positive connective implements exactly one reduction rule:
+/// Each positive connective implements exactly one interaction rule:
 ///
-/// | Connective | Reduction behaviour |
-/// |------------|---------------------|
+/// | Connective | Interaction behaviour |
+/// |------------|-----------------------|
 /// | `AtomP<X>` | Unreachable (`Infallible` intro) |
 /// | `One` | Invoke the bot elim's body with no arguments |
 /// | `Tensor<A,B>` | Destructure the pair, pass components to par body |
 /// | `Plus<A,B>` | Branch on injection, pass injected term to matching with arm |
 /// | `Bang<A>` | Pass the `BangIntro` producer to the whynot elim body |
-pub trait Reduction: Pos
+pub trait Interaction: Pos
 where
     Self::Dual: Neg,
 {
-    /// Structural β-reduction: intro form meets elim form.
-    ///
-    /// For atoms, this is unreachable (`match intro {}` on `std::convert::Infallible`).
-    /// For composites, destructures the intro and invokes the elim's body.
-    fn reduce<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s>;
+    /// Perform the interaction: destructure the intro and invoke the elim's
+    /// body with the resulting components. For atoms, unreachable
+    /// (`match intro {}` on `Infallible`), since atoms have no intro form.
+    fn interact<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s>;
 }
 
 // =============================================================================
-// 4.  Substitution at an elim (elim-side dispatch)
+// 4.  Resolution at an elim (elim-side dispatch)
 // =============================================================================
 
-/// Substitution: an elim consumes a resource.
+/// The resolution rule for an elim consuming a resource.
 ///
-/// This trait implements the *axiom-elim* interaction: when a variable
-/// (resource) of type `A` meets an elim of its dual type, the elim's
-/// body substitutes the resource and continues. The reduction logic lives
-/// with the elim because the elim has the body — the resource is merely
-/// an argument being consumed [Spiwack, module `Reduction`, rule `mu`].
+/// A resolution is an asymmetric absorption event: a bare variable
+/// ([`Resource`]) meets an elim, and the elim resolves the variable
+/// against its body. The elim's structural continuation is preserved;
+/// only the variable is absorbed [Spiwack, module `Reduction`, rule `mu`].
 ///
-/// For atoms, this is non-trivial: the elim body receives the resource
-/// wrapped as [`Term::Axiom`]. For composites, the interaction is blocked
-/// — the elim expects a structured intro, not a bare variable, so the
+/// For atoms, resolution is non-trivial: the elim body receives the resource
+/// wrapped as [`Term::Axiom`]. For composites, resolution is blocked
+/// — a composite destructor cannot destructure a bare variable — so the
 /// result is [`Command::Normal`] (blocked, awaiting outer substitution).
 ///
 /// The `PosType` associated type avoids a GAT projection problem:
-/// writing `Substitution<'s, Plus<A::Dual, B::Dual>>` as a trait parameter
+/// writing `Resolution<'s, Plus<A::Dual, B::Dual>>` as a trait parameter
 /// fails because the compiler cannot prove `Plus<A::Dual, B::Dual>: Pos`
 /// from `A: Neg, B: Neg` in that position. Using an associated type
 /// sidesteps the issue entirely.
-pub trait Substitution<'s> {
+pub trait Resolution<'s> {
     /// The positive type whose resources this elim can consume.
     type PosType: Pos;
-    /// Substitute a resource into this elim's body.
+    /// Resolve a resource into this elim's body.
     ///
     /// For atoms: invokes the body with the resource as a term.
     /// For composites: returns [`Command::Normal`] (blocked).
-    fn substitute(self, resource: Resource<'s, Self::PosType>) -> Command<'s>;
+    fn resolve(self, resource: Resource<'s, Self::PosType>) -> Command<'s>;
 }
 
 // =============================================================================
@@ -288,21 +287,21 @@ impl<X: 'static> Neg for AtomN<X> {
 /// The body receives a [`Term<'s, AtomP<X>>`]. When cut against a
 /// variable of type `AtomP<X>`, the variable is wrapped as
 /// `Term::Axiom(var)` and passed to this body — this is the atomic
-/// substitution rule.
+/// resolution rule.
 pub struct AtomElim<'s, X: 'static> {
     /// Body consuming a positive term.
     pub body: Box<dyn FnOnce(Term<'s, AtomP<X>>) -> Command<'s> + 's>,
 }
 
-impl<X: 'static> Reduction for AtomP<X> {
-    fn reduce<'s>(intro: Self::Intro<'s>, _elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+impl<X: 'static> Interaction for AtomP<X> {
+    fn interact<'s>(intro: Self::Intro<'s>, _elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         match intro {}
     }
 }
 
-impl<'s, X: 'static> Substitution<'s> for AtomElim<'s, X> {
+impl<'s, X: 'static> Resolution<'s> for AtomElim<'s, X> {
     type PosType = AtomP<X>;
-    fn substitute(self, resource: Resource<'s, AtomP<X>>) -> Command<'s> {
+    fn resolve(self, resource: Resource<'s, AtomP<X>>) -> Command<'s> {
         (self.body)(Term::Axiom(resource))
     }
 }
@@ -316,7 +315,7 @@ impl<'s, X: 'static> Substitution<'s> for AtomElim<'s, X> {
 /// The multiplicative unit of the positive side. Its introduction form
 /// is the unit value `()`. The De Morgan dual is [`Bot`] (⊥).
 ///
-/// Reduction at `One`/`Bot`: `cut((), μ̃().c)` reduces to `c`
+/// Interaction at `One`/`Bot`: `cut((), μ̃().c)` reduces to `c`
 /// `MMM §7, rule (R1)]; [Spiwack, `unit`].
 pub struct One;
 
@@ -325,7 +324,7 @@ pub struct One;
 /// The multiplicative unit of the negative side. Its elimination form
 /// is [`BotElim`], a zero-argument body. The De Morgan dual is [`One`].
 ///
-/// Reduction at `One`/`Bot`: `cut((), μ̃().c)` reduces to `c`.
+/// Interaction at `One`/`Bot`: `cut((), μ̃().c)` reduces to `c`.
 pub struct Bot;
 
 impl Pos for One {
@@ -347,15 +346,15 @@ pub struct BotElim<'s> {
     pub body: Box<dyn FnOnce() -> Command<'s> + 's>,
 }
 
-impl Reduction for One {
-    fn reduce<'s>(_intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+impl Interaction for One {
+    fn interact<'s>(_intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         (elim.body)()
     }
 }
 
-impl<'s> Substitution<'s> for BotElim<'s> {
+impl<'s> Resolution<'s> for BotElim<'s> {
     type PosType = One;
-    fn substitute(self, _resource: Resource<'s, One>) -> Command<'s> {
+    fn resolve(self, _resource: Resource<'s, One>) -> Command<'s> {
         Command::Normal
     }
 }
@@ -370,7 +369,7 @@ impl<'s> Substitution<'s> for BotElim<'s> {
 /// are pairs of terms `(Term<'s, A>, Term<'s, B>)`. The De Morgan dual
 /// is `Par<A::Dual, B::Dual>`.
 ///
-/// Reduction at `Tensor`/`Par`: `cut((v, w), μ̃(x ⅋ y).c)` reduces to
+/// Interaction at `Tensor`/`Par`: `cut((v, w), μ̃(x ⅋ y).c)` reduces to
 /// `c[v/x, w/y]` `MMM §7, rule (R⊗)]; [Spiwack, `pair`].
 pub struct Tensor<A: Pos, B: Pos>(PhantomData<(A, B)>);
 
@@ -380,7 +379,7 @@ pub struct Tensor<A: Pos, B: Pos>(PhantomData<(A, B)>);
 /// is [`ParElim`], a body consuming two terms. The De Morgan dual is
 /// `Tensor<A::Dual, B::Dual>`.
 ///
-/// Reduction at `Tensor`/`Par`: `cut((v, w), μ̃(x ⅋ y).c)` reduces to
+/// Interaction at `Tensor`/`Par`: `cut((v, w), μ̃(x ⅋ y).c)` reduces to
 /// `c[v/x, w/y]`.
 pub struct Par<A: Neg, B: Neg>(PhantomData<(A, B)>);
 
@@ -413,24 +412,24 @@ pub struct ParElim<'s, A: Pos, B: Pos> {
     pub body: Box<dyn FnOnce(Term<'s, A>, Term<'s, B>) -> Command<'s> + 's>,
 }
 
-impl<A: Pos, B: Pos> Reduction for Tensor<A, B>
+impl<A: Pos, B: Pos> Interaction for Tensor<A, B>
 where
     A::Dual: Neg,
     B::Dual: Neg,
 {
-    fn reduce<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+    fn interact<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         let (a, b) = intro;
         (elim.body)(a, b)
     }
 }
 
-impl<'s, A: Pos, B: Pos> Substitution<'s> for ParElim<'s, A, B>
+impl<'s, A: Pos, B: Pos> Resolution<'s> for ParElim<'s, A, B>
 where
     A::Dual: Neg,
     B::Dual: Neg,
 {
     type PosType = Tensor<A, B>;
-    fn substitute(self, _resource: Resource<'s, Tensor<A, B>>) -> Command<'s> {
+    fn resolve(self, _resource: Resource<'s, Tensor<A, B>>) -> Command<'s> {
         Command::Normal
     }
 }
@@ -445,7 +444,7 @@ where
 /// left or right injections ([`PlusIntro::Inl`] or [`PlusIntro::Inr`]).
 /// The De Morgan dual is `With<A::Dual, B::Dual>`.
 ///
-/// Reduction at `Plus`/`With`: `cut(inl(v), μ̃case(x ⇒ c₁, y ⇒ c₂))`
+/// Interaction at `Plus`/`With`: `cut(inl(v), μ̃case(x ⇒ c₁, y ⇒ c₂))`
 /// reduces to `c₁[v/x]`; similarly for `inr` and the right branch
 /// `MMM §7]; [Spiwack, `iota1`/`iota2`].
 pub struct Plus<A: Pos, B: Pos>(PhantomData<(A, B)>);
@@ -506,12 +505,12 @@ where
     pub right: Box<dyn FnOnce(Term<'s, B::Dual>) -> Command<'s> + 's>,
 }
 
-impl<A: Pos, B: Pos> Reduction for Plus<A, B>
+impl<A: Pos, B: Pos> Interaction for Plus<A, B>
 where
     A::Dual: Neg,
     B::Dual: Neg,
 {
-    fn reduce<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+    fn interact<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         match intro {
             PlusIntro::Inl(a) => (elim.left)(a),
             PlusIntro::Inr(b) => (elim.right)(b),
@@ -519,13 +518,13 @@ where
     }
 }
 
-impl<'s, A: Neg, B: Neg> Substitution<'s> for WithElim<'s, A, B>
+impl<'s, A: Neg, B: Neg> Resolution<'s> for WithElim<'s, A, B>
 where
     A::Dual: Pos,
     B::Dual: Pos,
 {
     type PosType = Plus<A::Dual, B::Dual>;
-    fn substitute(self, _resource: Resource<'s, Plus<A::Dual, B::Dual>>) -> Command<'s> {
+    fn resolve(self, _resource: Resource<'s, Plus<A::Dual, B::Dual>>) -> Command<'s> {
         Command::Normal
     }
 }
@@ -543,7 +542,7 @@ where
 ///
 /// The De Morgan dual is `Whynot<A::Dual>`.
 ///
-/// Reduction at `Bang`/`Whynot`: `cut(!v, μ̃!x.c)` reduces to `c[!v/x]`
+/// Interaction at `Bang`/`Whynot`: `cut(!v, μ̃!x.c)` reduces to `c[!v/x]`
 /// [Spiwack, `exponential`].
 pub struct Bang<A: Pos>(PhantomData<A>);
 
@@ -605,21 +604,21 @@ pub struct WhynotElim<'s, N: Neg> {
     pub body: Box<dyn FnOnce(BangIntro<'s, N::Dual>) -> Command<'s> + 's>,
 }
 
-impl<A: Pos> Reduction for Bang<A>
+impl<A: Pos> Interaction for Bang<A>
 where
     A::Dual: Neg,
 {
-    fn reduce<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+    fn interact<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
         (elim.body)(intro)
     }
 }
 
-impl<'s, N: Neg> Substitution<'s> for WhynotElim<'s, N>
+impl<'s, N: Neg> Resolution<'s> for WhynotElim<'s, N>
 where
     N::Dual: Pos,
 {
     type PosType = Bang<N::Dual>;
-    fn substitute(self, _resource: Resource<'s, Bang<N::Dual>>) -> Command<'s> {
+    fn resolve(self, _resource: Resource<'s, Bang<N::Dual>>) -> Command<'s> {
         Command::Normal
     }
 }

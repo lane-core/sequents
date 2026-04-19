@@ -2,7 +2,7 @@
 
 Multiplicative-additive linear System L with exponentials, embedded in Rust's type system. Scope structure is carried by lifetimes; linearity is enforced by move semantics.
 
-This library implements the λμμ̃-calculus — classical sequent calculus as a programming language. Terms and coterms are symmetric three-variant enums. One `cut` function dispatches over the 3×3 pairing. Per-connective reduction is handled by the `Reduction` and `Substitution` traits.
+This library implements the λμμ̃-calculus — classical sequent calculus as a programming language. Terms and coterms are symmetric three-variant enums. One `cut` function dispatches over the 3×3 pairing. Per-connective dispatch is handled by the `Interaction` and `Resolution` traits.
 
 ## What this is
 

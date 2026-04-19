@@ -7,7 +7,7 @@
 //! semantics. The library implements the λμμ̃-calculus (see `Grokking`) with
 //! symmetric three-variant [`Term`] and [`Coterm`] enums, a single [`cut`]
 //! function dispatching over the 3×3 pairing, and per-connective reduction
-//! via the [`Reduction`] and [`Substitution`] traits.
+//! via the [`Interaction`] and [`Resolution`] traits.
 //!
 //! ## Core concepts
 //!
@@ -39,7 +39,7 @@ pub mod reduce;
 pub mod types;
 
 pub use binder::*;
-pub use machine::{Command, run};
+pub use machine::{run, Command};
 pub use reduce::*;
 pub use types::*;
 
