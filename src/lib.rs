@@ -33,9 +33,13 @@
 //! * `Spiwack` — Spiwack, Arnaud. "A Dissection of L." 2014.
 //! * `Grokking` — Binder et al. "Grokking the Sequent Calculus." ICFP 2024.
 
+/// Constructor functions for terms and coterms (μ, μ̃, tensor, par, etc.).
 pub mod binder;
+/// The command type and normalization loop.
 pub mod machine;
+/// The single cut function and its 3×3 dispatch table.
 pub mod reduce;
+/// Core type definitions: Term/Coterm enums, polarity traits, connectives.
 pub mod types;
 
 pub use binder::*;
