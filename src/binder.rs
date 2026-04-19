@@ -22,7 +22,12 @@ use crate::types::{
 /// directly — this is the μ-reduction rule [Spiwack, `mu`].
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// use sequents::*;
+///
+/// struct X;
+/// let x: Resource<'static, AtomP<X>> = Resource::new();
+///
 /// let pos = mu::<'static, AtomP<X>>(|a: Coterm<'_, AtomN<X>>| {
 ///     // a is the coterm bound to α
 ///     cut(Term::Axiom(x), a)
@@ -49,7 +54,12 @@ where
 /// directly — this is the μ̃-reduction rule [Spiwack, `mu`].
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// use sequents::*;
+///
+/// struct X;
+/// let z: Resource<'static, AtomN<X>> = Resource::new();
+///
 /// let coterm = mu_tilde::<'static, AtomN<X>>(|t: Term<'_, AtomP<X>>| {
 ///     // t is the term bound to x
 ///     cut(t, z.into())
@@ -85,7 +95,12 @@ pub fn unit<'s>() -> Term<'s, One> {
 /// The introduction rule for tensor pairs `MMM §7, rule (R⊗)].
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// use sequents::*;
+///
+/// struct X;
+/// struct Y;
+///
 /// let x: Resource<'static, AtomP<X>> = Resource::new();
 /// let y: Resource<'static, AtomP<Y>> = Resource::new();
 /// let pair = tensor(x, y); // Term<Tensor<AtomP<X>, AtomP<Y>>>
@@ -237,7 +252,11 @@ where
 /// produce fresh linear terms on demand.
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// use sequents::*;
+///
+/// struct X;
+///
 /// let bang = promote::<'static, AtomP<X>>(|| Term::Axiom(Resource::new()));
 /// let v1 = derelict(bang.clone());
 /// let v2 = derelict(bang); // fresh term
