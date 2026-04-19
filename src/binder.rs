@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use crate::machine::Command;
-use crate::types::{
-    Bot, Coterm, Negative, One, Par, Plus, PlusIntro, Positive, Tensor, Term, Whynot, With,
-};
+use crate::types::{Bot, Coterm, Negative, One, Par, Plus, Positive, Tensor, Term, Whynot, With};
+use either::Either;
 
 // =============================================================================
 // μ and μ̃ binders (general continuations)
@@ -187,7 +186,7 @@ where
     A::Dual: Negative,
     B::Dual: Negative,
 {
-    Term::Intro(PlusIntro::Inl(v.into()))
+    Term::Intro(Either::Left(v.into()))
 }
 
 /// Right injection for plus: `inr(W)`.
@@ -199,7 +198,7 @@ where
     A::Dual: Negative,
     B::Dual: Negative,
 {
-    Term::Intro(PlusIntro::Inr(w.into()))
+    Term::Intro(Either::Right(w.into()))
 }
 
 // =============================================================================

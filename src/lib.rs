@@ -47,5 +47,8 @@ pub use machine::{run, Command};
 pub use reduce::*;
 pub use types::*;
 
+/// Re-exported for user convenience — `Plus::Intro` and `Plus::Witness` use this type.
+pub use either::Either;
+
 // Unit tests are colocated in each module's #[cfg(test)] block.
 // Integration tests live in tests/*.rs.

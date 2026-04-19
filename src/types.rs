@@ -2,20 +2,7 @@ use std::sync::Arc;
 
 use crate::machine::Command;
 
-// =============================================================================
-// 0.  Either (local, no dependency)
-// =============================================================================
-
-/// A value that is either `Left(L)` or `Right(R)`.
-///
-/// Used as the witness type for [`Plus`] — the choice of injection
-/// is carried at the type level.
-pub enum Either<L, R> {
-    /// Left variant.
-    Left(L),
-    /// Right variant.
-    Right(R),
-}
+use either::Either;
 
 // =============================================================================
 // 1.  Linear resource tokens
@@ -355,7 +342,7 @@ where
 /// Positive sum `A ⊕ B` (choice made at introduction time).
 ///
 /// The additive disjunction of linear logic. Introduction forms are
-/// left or right injections ([`PlusIntro::Inl`] or [`PlusIntro::Inr`]).
+/// left or right injections ([`Either::Left`] or [`Either::Right`]).
 /// The De Morgan dual is `With<A::Dual, B::Dual>`.
 ///
 /// Interaction at `Plus`/`With`: `cut(inl(v), μ̃case(x ⇒ c₁, y ⇒ c₂))`
@@ -374,24 +361,13 @@ pub struct Plus<A: Positive, B: Positive>(std::marker::PhantomData<(A, B)>);
 /// arm `Grokking §4.1]`.
 pub struct With<A: Negative, B: Negative>(std::marker::PhantomData<(A, B)>);
 
-/// Introduction form for `Plus<A, B>`.
-///
-/// Either left or right injection. The choice is made at construction
-/// time, not at destruction time — this is the additive character.
-pub enum PlusIntro<'s, A: Positive, B: Positive> {
-    /// Left injection: `inl(v)`.
-    Inl(Term<'s, A>),
-    /// Right injection: `inr(w)`.
-    Inr(Term<'s, B>),
-}
-
 impl<A: Positive, B: Positive> Positive for Plus<A, B>
 where
     A::Dual: Negative,
     B::Dual: Negative,
 {
     type Dual = With<A::Dual, B::Dual>;
-    type Intro<'s> = PlusIntro<'s, A, B>;
+    type Intro<'s> = Either<Term<'s, A>, Term<'s, B>>;
     type Witness<'x> = Either<A::Witness<'x>, B::Witness<'x>>;
 
     fn interact<'s>(
@@ -400,8 +376,8 @@ where
     ) -> Command<'s> {
         let (left, right) = elim;
         match intro {
-            PlusIntro::Inl(a) => left(a),
-            PlusIntro::Inr(b) => right(b),
+            Either::Left(a) => left(a),
+            Either::Right(b) => right(b),
         }
     }
 }
