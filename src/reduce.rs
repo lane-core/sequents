@@ -1,5 +1,5 @@
 use crate::machine::Command;
-use crate::types::{Coterm, Interaction, Neg, Resolution, Term};
+use crate::types::{Coterm, Interaction, Negative, Resolution, Term};
 
 /// The single cut function: `⟨t | e⟩`.
 ///
@@ -37,7 +37,7 @@ use crate::types::{Coterm, Interaction, Neg, Resolution, Term};
 /// `Interaction`] for the underlying rules.
 pub fn cut<'s, A: Interaction>(term: Term<'s, A>, coterm: Coterm<'s, A::Dual>) -> Command<'s>
 where
-    A::Dual: Neg,
+    A::Dual: Negative,
 {
     match (term, coterm) {
         // Axiom vs Axiom: canonical form.

@@ -92,7 +92,7 @@ fn tensor_par_reduce_cut() {
 
 #[test]
 fn duality_involution() {
-    fn check<P: Pos>() {}
+    fn check<P: Positive>() {}
     check::<AtomP<X>>();
     check::<One>();
     check::<Tensor<AtomP<X>, AtomP<Y>>>();
@@ -421,9 +421,9 @@ fn nested_binders_reduce() {
 
 #[test]
 fn additive_duality() {
-    fn check<P: Pos>() {}
+    fn check<P: Positive>() {}
     check::<Plus<AtomP<X>, AtomP<Y>>>();
-    fn check_neg<N: Neg>() {}
+    fn check_neg<N: Negative>() {}
     check_neg::<With<AtomN<X>, AtomN<Y>>>();
 }
 
@@ -469,9 +469,9 @@ fn plus_right_reduce() {
 
 #[test]
 fn exponential_duality() {
-    fn check<P: Pos>() {}
+    fn check<P: Positive>() {}
     check::<Bang<AtomP<X>>>();
-    fn check_neg<N: Neg>() {}
+    fn check_neg<N: Negative>() {}
     check_neg::<Whynot<AtomN<X>>>();
 }
 

@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 
 use crate::machine::Command;
 use crate::types::{
-    AtomElim, AtomN, AtomP, BangIntro, Bot, BotElim, Coterm, Neg, One, Par, ParElim, Plus,
-    PlusIntro, Pos, Tensor, Term, Whynot, WhynotElim, With, WithElim,
+    AtomElim, AtomN, AtomP, BangIntro, Bot, BotElim, Coterm, Negative, One, Par, ParElim, Plus,
+    PlusIntro, Positive, Tensor, Term, Whynot, WhynotElim, With, WithElim,
 };
 
 // =============================================================================
@@ -28,9 +28,9 @@ use crate::types::{
 ///     cut(Term::Axiom(x), a)
 /// });
 /// ```
-pub fn mu<'s, A: Pos>(body: impl FnOnce(Coterm<'s, A::Dual>) -> Command<'s> + 's) -> Term<'s, A>
+pub fn mu<'s, A: Positive>(body: impl FnOnce(Coterm<'s, A::Dual>) -> Command<'s> + 's) -> Term<'s, A>
 where
-    A::Dual: Neg,
+    A::Dual: Negative,
 {
     Term::Mu(Box::new(body))
 }
@@ -53,11 +53,11 @@ where
 ///     cut(t, z.into())
 /// });
 /// ```
-pub fn mu_tilde<'s, N: Neg>(
+pub fn mu_tilde<'s, N: Negative>(
     body: impl FnOnce(Term<'s, N::Dual>) -> Command<'s> + 's,
 ) -> Coterm<'s, N>
 where
-    N::Dual: Pos,
+    N::Dual: Positive,
 {
     Coterm::MuTilde(Box::new(body))
 }
@@ -88,13 +88,13 @@ pub fn unit<'s>() -> Term<'s, One> {
 /// let y: Resource<'static, AtomP<Y>> = Resource::new();
 /// let pair = tensor(x, y); // Term<Tensor<AtomP<X>, AtomP<Y>>>
 /// ```
-pub fn tensor<'s, A: Pos, B: Pos>(
+pub fn tensor<'s, A: Positive, B: Positive>(
     v: impl Into<Term<'s, A>>,
     w: impl Into<Term<'s, B>>,
 ) -> Term<'s, Tensor<A, B>>
 where
-    A::Dual: Neg,
-    B::Dual: Neg,
+    A::Dual: Negative,
+    B::Dual: Negative,
 {
     Term::Intro((v.into(), w.into()))
 }
@@ -103,10 +103,10 @@ where
 ///
 /// The left introduction rule for the additive disjunction `A ⊕ B`.
 /// Choice is made at construction time [Spiwack, `iota1`].
-pub fn inl<'s, A: Pos, B: Pos>(v: impl Into<Term<'s, A>>) -> Term<'s, Plus<A, B>>
+pub fn inl<'s, A: Positive, B: Positive>(v: impl Into<Term<'s, A>>) -> Term<'s, Plus<A, B>>
 where
-    A::Dual: Neg,
-    B::Dual: Neg,
+    A::Dual: Negative,
+    B::Dual: Negative,
 {
     Term::Intro(PlusIntro::Inl(v.into()))
 }
@@ -115,10 +115,10 @@ where
 ///
 /// The right introduction rule for the additive disjunction `A ⊕ B`.
 /// Choice is made at construction time [Spiwack, `iota2`].
-pub fn inr<'s, A: Pos, B: Pos>(w: impl Into<Term<'s, B>>) -> Term<'s, Plus<A, B>>
+pub fn inr<'s, A: Positive, B: Positive>(w: impl Into<Term<'s, B>>) -> Term<'s, Plus<A, B>>
 where
-    A::Dual: Neg,
-    B::Dual: Neg,
+    A::Dual: Negative,
+    B::Dual: Negative,
 {
     Term::Intro(PlusIntro::Inr(w.into()))
 }
@@ -164,12 +164,12 @@ pub fn mu_unit<'s>(body: impl FnOnce() -> Command<'s> + 's) -> Coterm<'s, Bot> {
 /// `μ̃(x ⅋ y).c` destructures the pair and binds its components
 /// `Grokking §4.1]. Reduction: `cut((v, w), μ̃(x ⅋ y).c)` reduces to
 /// `c[v/x, w/y]` `MMM §7, rule (R⊗)].
-pub fn mu_par<'s, A: Pos, B: Pos>(
+pub fn mu_par<'s, A: Positive, B: Positive>(
     body: impl FnOnce(Term<'s, A>, Term<'s, B>) -> Command<'s> + 's,
 ) -> Coterm<'s, Par<A::Dual, B::Dual>>
 where
-    A::Dual: Neg,
-    B::Dual: Neg,
+    A::Dual: Negative,
+    B::Dual: Negative,
 {
     Coterm::Elim(ParElim {
         body: Box::new(body),
@@ -186,13 +186,13 @@ where
 /// whether the term was `inl` or `inr` `Grokking §4.1].
 /// Reduction: `cut(inl(v), μ̃case(x ⇒ c₁, y ⇒ c₂))` reduces to `c₁[v/x]`
 /// [Spiwack, `iota1`/`iota2`].
-pub fn mu_case<'s, A: Pos, B: Pos>(
+pub fn mu_case<'s, A: Positive, B: Positive>(
     body_left: impl FnOnce(Term<'s, A>) -> Command<'s> + 's,
     body_right: impl FnOnce(Term<'s, B>) -> Command<'s> + 's,
 ) -> Coterm<'s, With<A::Dual, B::Dual>>
 where
-    A::Dual: Neg,
-    B::Dual: Neg,
+    A::Dual: Negative,
+    B::Dual: Negative,
 {
     Coterm::Elim(WithElim {
         left: Box::new(body_left),
@@ -208,11 +208,11 @@ where
 /// The body may clone the producer any number of times (zero, one,
 /// many), or drop it without use. This is the exponential destructor
 /// `μ̃!x.c` [Spiwack, `exponential`].
-pub fn mu_bang<'s, A: Pos>(
+pub fn mu_bang<'s, A: Positive>(
     body: impl FnOnce(BangIntro<'s, A>) -> Command<'s> + 's,
 ) -> Coterm<'s, Whynot<A::Dual>>
 where
-    A::Dual: Neg,
+    A::Dual: Negative,
 {
     Coterm::Elim(WhynotElim {
         body: Box::new(body),
@@ -240,9 +240,9 @@ where
 /// let v1 = derelict(bang.clone());
 /// let v2 = derelict(bang); // fresh term
 /// ```
-pub fn promote<'s, A: Pos>(producer: impl Fn() -> Term<'s, A> + 's) -> BangIntro<'s, A>
+pub fn promote<'s, A: Positive>(producer: impl Fn() -> Term<'s, A> + 's) -> BangIntro<'s, A>
 where
-    A::Dual: Neg,
+    A::Dual: Negative,
 {
     BangIntro {
         producer: std::rc::Rc::new(producer),
@@ -258,9 +258,9 @@ where
 ///
 /// Each call to `derelict` on the same [`BangIntro`] produces a
 /// fresh term — the producer is not consumed.
-pub fn derelict<'s, A: Pos>(v: BangIntro<'s, A>) -> Term<'s, A>
+pub fn derelict<'s, A: Positive>(v: BangIntro<'s, A>) -> Term<'s, A>
 where
-    A::Dual: Neg,
+    A::Dual: Negative,
 {
     (v.producer)()
 }
