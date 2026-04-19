@@ -7,7 +7,7 @@
 //! semantics. The library implements the λμ̃μ-calculus (see `Grokking`) with
 //! symmetric three-variant [`Term`] and [`Coterm`] enums, a single [`cut`]
 //! function dispatching over the 3×3 pairing, and per-connective reduction
-//! via the [`Interaction`] and [`Resolution`] traits.
+//! via the [`Positive::interact`] and [`Negative::resolve`] methods.
 //!
 //! ## Core concepts
 //!
@@ -22,7 +22,7 @@
 //! Multiplicative: [`One`] / [`Bot`], [`Tensor`] / [`Par`].
 //! Additive: [`Plus`] / [`With`].
 //! Exponential: [`Bang`] / [`Whynot`].
-//! Atomic: [`AtomP`] / [`AtomN`].
+//! Atomic: user-defined types implementing [`Positive`] or [`Negative`].
 //!
 //! ## References
 //!

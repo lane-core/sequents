@@ -1,56 +1,88 @@
-use std::marker::PhantomData;
+use std::sync::Arc;
 
 use crate::machine::Command;
 
 // =============================================================================
-// 0.  Linear resource token
+// 0.  Either (local, no dependency)
 // =============================================================================
 
-/// A linear resource token at type `A` in scope `'x`.
+/// A value that is either `Left(L)` or `Right(R)`.
+///
+/// Used as the witness type for [`Plus`] — the choice of injection
+/// is carried at the type level.
+pub enum Either<L, R> {
+    /// Left variant.
+    Left(L),
+    /// Right variant.
+    Right(R),
+}
+
+// =============================================================================
+// 1.  Linear resource tokens
+// =============================================================================
+
+/// A linear resource token at positive type `A` in scope `'x`.
 ///
 /// Under the resource-theoretic reading of linear logic, a formula is a
 /// resource that gets consumed in proofs. A `Resource<'x, A>` is the
-/// proof-theoretic token for such a resource: it carries no runtime data
-/// (it is `PhantomData` under the hood), but it represents the right to
-/// use a value of type `A` exactly once in scope `'x`.
+/// proof-theoretic token for such a resource: it carries the
+/// [`Positive::Witness<'x>`] of `A`, the runtime evidence that the
+/// resource exists in scope `'x`.
 ///
 /// Non-`Copy`, non-`Clone` — using it twice is a compile error. Move
 /// semantics enforce linearity at the type-system level. This is the
 /// axiom rule in sequent-calculus terms: a resource of type `A` is
-/// trivially a term (or coterm) of type `A`.
+/// trivially a term of type `A`.
 ///
-/// See `Grokking §2] for an accessible introduction to the sequent-calculus
+/// See `Grokking §2]` for an accessible introduction to the sequent-calculus
 /// treatment of variables as first-class resources.
-pub struct Resource<'x, A> {
-    _marker: PhantomData<&'x ()>,
-    _type: PhantomData<A>,
+pub struct Resource<'x, A: Positive> {
+    witness: A::Witness<'x>,
 }
 
-impl<'x, A> Resource<'x, A> {
-    /// Create a fresh resource token.
+impl<'x, A: Positive> Resource<'x, A> {
+    /// Create a resource token from a witness.
     ///
     /// In a real term, resources are introduced by binders; this
     /// constructor is useful for building open terms (e.g. the axiom
     /// rule) and for testing.
-    pub fn new() -> Self {
-        Resource {
-            _marker: PhantomData,
-            _type: PhantomData,
-        }
+    pub fn new(witness: A::Witness<'x>) -> Self {
+        Resource { witness }
     }
-}
 
-impl<'x, A> Default for Resource<'x, A> {
-    fn default() -> Self {
-        Self::new()
+    pub fn into_witness(self) -> A::Witness<'x> {
+        self.witness
     }
 }
 
 // Explicitly NOT implementing Clone or Copy.
 // Move semantics enforce linearity.
 
+/// A linear resource token at negative type `N` in scope `'x`.
+///
+/// The negative counterpart to [`Resource`]. A `CoResource<'x, N>`
+/// carries the [`Negative::Witness<'x>`] of `N`.
+///
+/// Non-`Copy`, non-`Clone` — move semantics enforce linearity.
+pub struct CoResource<'x, N: Negative> {
+    witness: N::Witness<'x>,
+}
+
+impl<'x, N: Negative> CoResource<'x, N> {
+    /// Create a co-resource token from a witness.
+    pub fn new(witness: N::Witness<'x>) -> Self {
+        CoResource { witness }
+    }
+
+    pub fn into_witness(self) -> N::Witness<'x> {
+        self.witness
+    }
+}
+
+// Explicitly NOT implementing Clone or Copy.
+
 // =============================================================================
-// 1.  Uniform term and coterm enums
+// 2.  Uniform term and coterm enums
 // =============================================================================
 
 /// A positive term at scope `'s`.
@@ -71,11 +103,11 @@ impl<'x, A> Default for Resource<'x, A> {
 ///   receives a coterm of the dual type and produces a [`Command`].
 ///   This is the control operator on the positive side: it captures
 ///   the current evaluation context (covariable) as a first-class
-///   object `Grokking §3.2].
+///   object `Grokking §3.2]`.
 ///
 /// The three-variant structure mirrors the classical sequent calculus:
 /// variables (axiom), structural forms (intro/elim), and μ/μ̃-bound
-/// continuations. See `MMM §7] and `Spiwack` for the underlying calculus.
+/// continuations. See `MMM §7]` and `Spiwack` for the underlying calculus.
 pub enum Term<'s, A: Positive> {
     /// Axiom rule: a resource is a term of its type.
     Axiom(Resource<'s, A>),
@@ -94,7 +126,7 @@ pub enum Term<'s, A: Positive> {
 /// duality. Three variants, symmetric with [`Term`] under De Morgan
 /// duality:
 ///
-/// * [`Coterm::Axiom`] — the axiom rule. A resource of type `N` is
+/// * [`Coterm::Axiom`] — the axiom rule. A co-resource of type `N` is
 ///   trivially a coterm of type `N`.
 ///
 /// * [`Coterm::Elim`] — a structural elimination form. Each negative
@@ -106,14 +138,14 @@ pub enum Term<'s, A: Positive> {
 ///   that receives a term of the dual type and produces a [`Command`].
 ///   This is the control operator on the negative side: it captures
 ///   the current term (variable) as a first-class object
-///   `Grokking §3.2].
+///   `Grokking §3.2]`.
 ///
 /// The symmetry between [`Term`] and [`Coterm`] is not superficial
 /// sameness — it is the theory's duality made visible. Data and
-/// codata are exactly dual to each other `Grokking §4.1].
+/// codata are exactly dual to each other `Grokking §4.1]`.
 pub enum Coterm<'s, N: Negative> {
-    /// Axiom rule: a resource is a coterm of its type.
-    Axiom(Resource<'s, N>),
+    /// Axiom rule: a co-resource is a coterm of its type.
+    Axiom(CoResource<'s, N>),
     /// Structural elimination form (per-connective).
     Elim(N::Elim<'s>),
     /// μ̃-binder: general continuation closure.
@@ -129,14 +161,14 @@ impl<'s, A: Positive> From<Resource<'s, A>> for Term<'s, A> {
     }
 }
 
-impl<'s, N: Negative> From<Resource<'s, N>> for Coterm<'s, N> {
-    fn from(r: Resource<'s, N>) -> Self {
+impl<'s, N: Negative> From<CoResource<'s, N>> for Coterm<'s, N> {
+    fn from(r: CoResource<'s, N>) -> Self {
         Coterm::Axiom(r)
     }
 }
 
 // =============================================================================
-// 2.  Polarity traits
+// 3.  Polarity traits
 // =============================================================================
 
 /// Positive types of linear classical L.
@@ -149,7 +181,11 @@ impl<'s, N: Negative> From<Resource<'s, N>> for Coterm<'s, N> {
 /// always in negation-normal form. The duality is involutive:
 /// `<A as Positive>::Dual::Dual = A`.
 ///
-/// See `MMM §7] for the linear call-by-push-value L-calculus, and
+/// Each positive connective implements [`interact`](Positive::interact) —
+/// the structural β-rule that fires when an intro form meets the dual's
+/// elim form.
+///
+/// See `MMM §7]` for the linear call-by-push-value L-calculus, and
 /// `Spiwack` for the polarized system L treatment.
 pub trait Positive: Sized + 'static {
     /// The De Morgan dual — a negative type.
@@ -157,10 +193,28 @@ pub trait Positive: Sized + 'static {
     /// The concrete introduction form at scope `'s`.
     ///
     /// For atomic types this is `std::convert::Infallible` — atoms have no
-    /// introduction form besides the axiom rule (variables).
+    /// structural introduction form besides the axiom rule (variables).
     /// For composite types this is a product, sum, or unit value
     /// carrying the components of the introduction.
     type Intro<'s>;
+    /// The witness type in scope `'x`.
+    ///
+    /// A witness is the runtime content carried by a bare variable
+    /// (axiom) of this type. For atoms it is the atom value itself;
+    /// for composites it is a structural description of the value's
+    /// shape. See the witness table in the crate documentation.
+    type Witness<'x>;
+
+    /// Perform the interaction: destructure the intro and invoke the elim's
+    /// body with the resulting components.
+    ///
+    /// This is the structural β-rule for the connective. For atoms,
+    /// unreachable (`match intro {}` on `Infallible`), since atoms have
+    /// no intro form.
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s>;
 }
 
 /// Negative types of linear classical L.
@@ -172,9 +226,8 @@ pub trait Positive: Sized + 'static {
 /// The [`Negative::Dual`] associated type computes the De Morgan dual.
 /// The duality is involutive: `<N as Negative>::Dual::Dual = N`.
 ///
-/// Every elim type must implement [`Resolution`] — the elim-side
-/// dispatch for axiom-elim interactions. See [`Resolution`] for
-/// why this lives on the elim rather than on the positive type.
+/// Each negative connective implements [`resolve`](Negative::resolve) —
+/// the elim-side dispatch for axiom-elim interactions.
 pub trait Negative: Sized + 'static {
     /// The De Morgan dual — a positive type.
     type Dual: Positive<Dual = Self>;
@@ -182,138 +235,24 @@ pub trait Negative: Sized + 'static {
     ///
     /// Each elim type carries the body of a destructor: a closure
     /// that consumes the components introduced by the dual positive
-    /// connective. The elim must implement [`Resolution`] so that
-    /// `cut` can dispatch axiom-elim interactions elim-side.
-    type Elim<'s>: Resolution<'s, PosType = Self::Dual>;
-}
+    /// connective.
+    type Elim<'s>;
+    /// The witness type in scope `'x`.
+    ///
+    /// A witness is the runtime content carried by a bare covariable
+    /// (axiom) of this type. See the witness table in the crate
+    /// documentation.
+    type Witness<'x>;
 
-// =============================================================================
-// 3.  Interaction (pair-relation trait)
-// =============================================================================
-
-/// The interaction rule for the positive connective `A` and its dual.
-///
-/// An interaction is a symmetric active-pair event: `A`'s intro form meets its
-/// dual's elim form, and the β-rule for the connective fires. Both participants
-/// are structurally active and contribute to the reduction; the event is
-/// symmetric in the sense that neither side owns the logic — the rule is a
-/// pair-relation.
-///
-/// The trait is placed on [`Positive`] for Rust's sake; it could equivalently be
-/// placed on [`Negative`], since interaction is a property of the connective pair
-/// rather than of either polarity alone [Spiwack, module `Reduction`].
-///
-/// Each positive connective implements exactly one interaction rule:
-///
-/// | Connective | Interaction behaviour |
-/// |------------|-----------------------|
-/// | `AtomP<X>` | Unreachable (`Infallible` intro) |
-/// | `One` | Invoke the bot elim's body with no arguments |
-/// | `Tensor<A,B>` | Destructure the pair, pass components to par body |
-/// | `Plus<A,B>` | Branch on injection, pass injected term to matching with arm |
-/// | `Bang<A>` | Pass the `BangIntro` producer to the whynot elim body |
-pub trait Interaction: Positive
-where
-    Self::Dual: Negative,
-{
-    /// Perform the interaction: destructure the intro and invoke the elim's
-    /// body with the resulting components. For atoms, unreachable
-    /// (`match intro {}` on `Infallible`), since atoms have no intro form.
-    fn interact<'s>(
-        intro: Self::Intro<'s>,
-        elim: <Self::Dual as Negative>::Elim<'s>,
-    ) -> Command<'s>;
-}
-
-// =============================================================================
-// 4.  Resolution at an elim (elim-side dispatch)
-// =============================================================================
-
-/// The resolution rule for an elim consuming a resource.
-///
-/// A resolution is an asymmetric absorption event: a bare variable
-/// ([`Resource`]) meets an elim, and the elim resolves the variable
-/// against its body. The elim's structural continuation is preserved;
-/// only the variable is absorbed [Spiwack, module `Reduction`, rule `mu`].
-///
-/// For atoms, resolution is non-trivial: the elim body receives the resource
-/// wrapped as [`Term::Axiom`]. For composites, resolution is blocked
-/// — a composite destructor cannot destructure a bare variable — so the
-/// result is [`Command::Normal`] (blocked, awaiting outer substitution).
-///
-/// The `PosType` associated type avoids a GAT projection problem:
-/// writing `Resolution<'s, Plus<A::Dual, B::Dual>>` as a trait parameter
-/// fails because the compiler cannot prove `Plus<A::Dual, B::Dual>: Positive`
-/// from `A: Negative, B: Negative` in that position. Using an associated type
-/// sidesteps the issue entirely.
-pub trait Resolution<'s> {
-    /// The positive type whose resources this elim can consume.
-    type PosType: Positive;
     /// Resolve a resource into this elim's body.
     ///
-    /// For atoms: invokes the body with the resource as a term.
+    /// For atoms: invokes the body with the resource's witness.
     /// For composites: returns [`Command::Normal`] (blocked).
-    fn resolve(self, resource: Resource<'s, Self::PosType>) -> Command<'s>;
+    fn resolve<'s>(elim: Self::Elim<'s>, resource: Resource<'s, Self::Dual>) -> Command<'s>;
 }
 
 // =============================================================================
-// 5.  Atoms
-// =============================================================================
-
-/// Positive atom `X`.
-///
-/// An atomic positive type. Atoms have no structural introduction form
-/// besides variables — `AtomP::Intro<'s>` is `std::convert::Infallible`. The only
-/// way to introduce an atom is the axiom rule: a resource of type `X`
-/// is trivially a term of type `X`.
-pub struct AtomP<X>(PhantomData<X>);
-
-/// Negative atom `X⊥` — the De Morgan dual of `AtomP<X>`.
-///
-/// The elimination form for `AtomN<X>` is [`AtomElim`], which carries a
-/// body consuming a positive term of type `AtomP<X>`. This is the
-/// atomic μ̃-reduction: `<x | μ̃y.c>` reduces to `c[x/y]` [Spiwack, `mu`].
-pub struct AtomN<X>(PhantomData<X>);
-
-impl<X: 'static> Positive for AtomP<X> {
-    type Dual = AtomN<X>;
-    type Intro<'s> = std::convert::Infallible;
-}
-
-impl<X: 'static> Negative for AtomN<X> {
-    type Dual = AtomP<X>;
-    type Elim<'s> = AtomElim<'s, X>;
-}
-
-/// Elimination form for `AtomN<X>`.
-///
-/// The body receives a [`Term<'s, AtomP<X>>`]. When cut against a
-/// variable of type `AtomP<X>`, the variable is wrapped as
-/// `Term::Axiom(var)` and passed to this body — this is the atomic
-/// resolution rule.
-pub struct AtomElim<'s, X: 'static> {
-    /// Body consuming a positive term.
-    pub body: Box<dyn FnOnce(Term<'s, AtomP<X>>) -> Command<'s> + 's>,
-}
-
-impl<X: 'static> Interaction for AtomP<X> {
-    fn interact<'s>(
-        intro: Self::Intro<'s>,
-        _elim: <Self::Dual as Negative>::Elim<'s>,
-    ) -> Command<'s> {
-        match intro {}
-    }
-}
-
-impl<'s, X: 'static> Resolution<'s> for AtomElim<'s, X> {
-    type PosType = AtomP<X>;
-    fn resolve(self, resource: Resource<'s, AtomP<X>>) -> Command<'s> {
-        (self.body)(Term::Axiom(resource))
-    }
-}
-
-// =============================================================================
-// 6.  Multiplicative units
+// 4.  Multiplicative units
 // =============================================================================
 
 /// Positive unit `1`.
@@ -328,7 +267,7 @@ pub struct One;
 /// Negative unit `⊥` (bottom).
 ///
 /// The multiplicative unit of the negative side. Its elimination form
-/// is [`BotElim`], a zero-argument body. The De Morgan dual is [`One`].
+/// is a zero-argument closure. The De Morgan dual is [`One`].
 ///
 /// Interaction at `One`/`Bot`: `cut((), μ̃().c)` reduces to `c`.
 pub struct Bot;
@@ -336,40 +275,25 @@ pub struct Bot;
 impl Positive for One {
     type Dual = Bot;
     type Intro<'s> = ();
+    type Witness<'x> = ();
+
+    fn interact<'s>(_: Self::Intro<'s>, elim: <Self::Dual as Negative>::Elim<'s>) -> Command<'s> {
+        elim()
+    }
 }
 
 impl Negative for Bot {
     type Dual = One;
-    type Elim<'s> = BotElim<'s>;
-}
+    type Elim<'s> = Box<dyn FnOnce() -> Command<'s> + 's>;
+    type Witness<'x> = ();
 
-/// Elimination form for `Bot`.
-///
-/// A zero-argument body — the destructor for the unit type.
-/// When cut against `unit()`, the body runs with no arguments.
-pub struct BotElim<'s> {
-    /// Body with no arguments.
-    pub body: Box<dyn FnOnce() -> Command<'s> + 's>,
-}
-
-impl Interaction for One {
-    fn interact<'s>(
-        _intro: Self::Intro<'s>,
-        elim: <Self::Dual as Negative>::Elim<'s>,
-    ) -> Command<'s> {
-        (elim.body)()
-    }
-}
-
-impl<'s> Resolution<'s> for BotElim<'s> {
-    type PosType = One;
-    fn resolve(self, _resource: Resource<'s, One>) -> Command<'s> {
+    fn resolve<'s>(_: Self::Elim<'s>, _: Resource<'s, Self::Dual>) -> Command<'s> {
         Command::Normal
     }
 }
 
 // =============================================================================
-// 7.  Multiplicative connectives
+// 5.  Multiplicative connectives
 // =============================================================================
 
 /// Tensor `A ⊗ B` (both components positive).
@@ -380,17 +304,17 @@ impl<'s> Resolution<'s> for BotElim<'s> {
 ///
 /// Interaction at `Tensor`/`Par`: `cut((v, w), μ̃(x ⅋ y).c)` reduces to
 /// `c[v/x, w/y]` `MMM §7, rule (R⊗)]; [Spiwack, `pair`].
-pub struct Tensor<A: Positive, B: Positive>(PhantomData<(A, B)>);
+pub struct Tensor<A: Positive, B: Positive>(std::marker::PhantomData<(A, B)>);
 
 /// Par `A ⅋ B` (both components negative).
 ///
 /// The multiplicative disjunction of linear logic. Its elimination form
-/// is [`ParElim`], a body consuming two terms. The De Morgan dual is
+/// is a two-argument closure consuming two terms. The De Morgan dual is
 /// `Tensor<A::Dual, B::Dual>`.
 ///
 /// Interaction at `Tensor`/`Par`: `cut((v, w), μ̃(x ⅋ y).c)` reduces to
 /// `c[v/x, w/y]`.
-pub struct Par<A: Negative, B: Negative>(PhantomData<(A, B)>);
+pub struct Par<A: Negative, B: Negative>(std::marker::PhantomData<(A, B)>);
 
 impl<A: Positive, B: Positive> Positive for Tensor<A, B>
 where
@@ -399,6 +323,15 @@ where
 {
     type Dual = Par<A::Dual, B::Dual>;
     type Intro<'s> = (Term<'s, A>, Term<'s, B>);
+    type Witness<'x> = (A::Witness<'x>, B::Witness<'x>);
+
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s> {
+        let (a, b) = intro;
+        elim(a, b)
+    }
 }
 
 impl<A: Negative, B: Negative> Negative for Par<A, B>
@@ -407,47 +340,16 @@ where
     B::Dual: Positive,
 {
     type Dual = Tensor<A::Dual, B::Dual>;
-    type Elim<'s> = ParElim<'s, A::Dual, B::Dual>;
-}
+    type Elim<'s> = Box<dyn FnOnce(Term<'s, A::Dual>, Term<'s, B::Dual>) -> Command<'s> + 's>;
+    type Witness<'x> = Box<dyn FnOnce(A::Witness<'x>, B::Witness<'x>) + 'x>;
 
-/// Elimination form for `Par<A, B>`.
-///
-/// The body receives the two components of the tensor pair that
-/// triggered this reduction. This is the par destructor
-/// `μ̃(x ⅋ y).c` — a μ̃-form specialized to pattern-matching on
-/// tensor pairs `Grokking §4.1].
-pub struct ParElim<'s, A: Positive, B: Positive> {
-    /// Body consuming two terms.
-    pub body: Box<dyn FnOnce(Term<'s, A>, Term<'s, B>) -> Command<'s> + 's>,
-}
-
-impl<A: Positive, B: Positive> Interaction for Tensor<A, B>
-where
-    A::Dual: Negative,
-    B::Dual: Negative,
-{
-    fn interact<'s>(
-        intro: Self::Intro<'s>,
-        elim: <Self::Dual as Negative>::Elim<'s>,
-    ) -> Command<'s> {
-        let (a, b) = intro;
-        (elim.body)(a, b)
-    }
-}
-
-impl<'s, A: Positive, B: Positive> Resolution<'s> for ParElim<'s, A, B>
-where
-    A::Dual: Negative,
-    B::Dual: Negative,
-{
-    type PosType = Tensor<A, B>;
-    fn resolve(self, _resource: Resource<'s, Tensor<A, B>>) -> Command<'s> {
+    fn resolve<'s>(_: Self::Elim<'s>, _: Resource<'s, Self::Dual>) -> Command<'s> {
         Command::Normal
     }
 }
 
 // =============================================================================
-// 8.  Additive connectives
+// 6.  Additive connectives
 // =============================================================================
 
 /// Positive sum `A ⊕ B` (choice made at introduction time).
@@ -458,19 +360,19 @@ where
 ///
 /// Interaction at `Plus`/`With`: `cut(inl(v), μ̃case(x ⇒ c₁, y ⇒ c₂))`
 /// reduces to `c₁[v/x]`; similarly for `inr` and the right branch
-/// `MMM §7]; [Spiwack, `iota1`/`iota2`].
-pub struct Plus<A: Positive, B: Positive>(PhantomData<(A, B)>);
+/// `MMM §7]`; [Spiwack, `iota1`/`iota2`].
+pub struct Plus<A: Positive, B: Positive>(std::marker::PhantomData<(A, B)>);
 
 /// Negative with `A & B` (choice made at destruction time).
 ///
 /// The additive conjunction of linear logic. Its elimination form is
-/// [`WithElim`], carrying two continuations — one per injection.
+/// a pair of continuations — one per injection.
 /// The De Morgan dual is `Plus<A::Dual, B::Dual>`.
 ///
 /// The with destructor `μ̃case(x ⇒ c₁, y ⇒ c₂)` is a μ̃-form that
 /// pattern-matches on plus injections, dispatching to the appropriate
-/// arm `Grokking §4.1].
-pub struct With<A: Negative, B: Negative>(PhantomData<(A, B)>);
+/// arm `Grokking §4.1]`.
+pub struct With<A: Negative, B: Negative>(std::marker::PhantomData<(A, B)>);
 
 /// Introduction form for `Plus<A, B>`.
 ///
@@ -490,6 +392,18 @@ where
 {
     type Dual = With<A::Dual, B::Dual>;
     type Intro<'s> = PlusIntro<'s, A, B>;
+    type Witness<'x> = Either<A::Witness<'x>, B::Witness<'x>>;
+
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s> {
+        let (left, right) = elim;
+        match intro {
+            PlusIntro::Inl(a) => left(a),
+            PlusIntro::Inr(b) => right(b),
+        }
+    }
 }
 
 impl<A: Negative, B: Negative> Negative for With<A, B>
@@ -498,106 +412,55 @@ where
     B::Dual: Positive,
 {
     type Dual = Plus<A::Dual, B::Dual>;
-    type Elim<'s> = WithElim<'s, A, B>;
-}
+    type Elim<'s> = (
+        Box<dyn FnOnce(Term<'s, A::Dual>) -> Command<'s> + 's>,
+        Box<dyn FnOnce(Term<'s, B::Dual>) -> Command<'s> + 's>,
+    );
+    type Witness<'x> = (A::Witness<'x>, B::Witness<'x>);
 
-/// Elimination form for `With<A, B>`.
-///
-/// Two continuations, one per injection. When cut against a `PlusIntro`,
-/// the appropriate body is invoked with the injected term. This is the
-/// case destructor `μ̃case(x ⇒ c₁, y ⇒ c₂)`.
-pub struct WithElim<'s, A: Negative, B: Negative>
-where
-    A::Dual: Positive,
-    B::Dual: Positive,
-{
-    /// Body for the left injection.
-    pub left: Box<dyn FnOnce(Term<'s, A::Dual>) -> Command<'s> + 's>,
-    /// Body for the right injection.
-    pub right: Box<dyn FnOnce(Term<'s, B::Dual>) -> Command<'s> + 's>,
-}
-
-impl<A: Positive, B: Positive> Interaction for Plus<A, B>
-where
-    A::Dual: Negative,
-    B::Dual: Negative,
-{
-    fn interact<'s>(
-        intro: Self::Intro<'s>,
-        elim: <Self::Dual as Negative>::Elim<'s>,
-    ) -> Command<'s> {
-        match intro {
-            PlusIntro::Inl(a) => (elim.left)(a),
-            PlusIntro::Inr(b) => (elim.right)(b),
-        }
-    }
-}
-
-impl<'s, A: Negative, B: Negative> Resolution<'s> for WithElim<'s, A, B>
-where
-    A::Dual: Positive,
-    B::Dual: Positive,
-{
-    type PosType = Plus<A::Dual, B::Dual>;
-    fn resolve(self, _resource: Resource<'s, Plus<A::Dual, B::Dual>>) -> Command<'s> {
+    fn resolve<'s>(_: Self::Elim<'s>, _: Resource<'s, Self::Dual>) -> Command<'s> {
         Command::Normal
     }
 }
 
 // =============================================================================
-// 9.  Exponential connectives
+// 7.  Exponential connectives
 // =============================================================================
 
 /// Positive exponential `!A` — duplicable terms.
 ///
 /// The exponential modality of linear logic. Terms of type `!A` are
 /// classical (duplicable) — they can be used zero, one, or many times.
-/// The introduction form is [`BangIntro`], a producer closure that can
-/// be cloned to yield fresh linear terms on demand.
+/// The introduction form is an `Arc`-wrapped witness that can be
+/// cloned to yield fresh resources on demand.
 ///
 /// The De Morgan dual is `Whynot<A::Dual>`.
 ///
 /// Interaction at `Bang`/`Whynot`: `cut(!v, μ̃!x.c)` reduces to `c[!v/x]`
 /// [Spiwack, `exponential`].
-pub struct Bang<A: Positive>(PhantomData<A>);
+pub struct Bang<A: Positive>(std::marker::PhantomData<A>);
 
 /// Negative exponential `?A` — dual of `!A`.
 ///
-/// The dual exponential modality. Its elimination form is
-/// [`WhynotElim`], a body consuming a [`BangIntro`]. The De Morgan
-/// dual is `Bang<N::Dual>`.
-pub struct Whynot<N: Negative>(PhantomData<N>);
-
-/// Introduction form for `Bang<A>`.
-///
-/// A duplicable producer of terms. The producer is an `Rc`-wrapped
-/// closure that can be cloned any number of times, each invocation
-/// yielding a fresh linear term. This enforces the structural rule
-/// of exponentials at the value level: duplication is explicit and
-/// controlled.
-///
-/// The producer must be closed (no free linear variables) — this is
-/// enforced by Rust's move semantics on the closure.
-pub struct BangIntro<'s, A: Positive> {
-    pub(crate) producer: std::rc::Rc<dyn Fn() -> Term<'s, A> + 's>,
-    pub(crate) _marker: PhantomData<&'s ()>,
-}
-
-impl<'s, A: Positive> Clone for BangIntro<'s, A> {
-    fn clone(&self) -> Self {
-        BangIntro {
-            producer: self.producer.clone(),
-            _marker: PhantomData,
-        }
-    }
-}
+/// The dual exponential modality. Its elimination form is a closure
+/// consuming an `Arc`-wrapped witness. The De Morgan dual is
+/// `Bang<N::Dual>`.
+pub struct Whynot<N: Negative>(std::marker::PhantomData<N>);
 
 impl<A: Positive> Positive for Bang<A>
 where
     A::Dual: Negative,
 {
     type Dual = Whynot<A::Dual>;
-    type Intro<'s> = BangIntro<'s, A>;
+    type Intro<'s> = Arc<A::Witness<'s>>;
+    type Witness<'x> = Arc<A::Witness<'x>>;
+
+    fn interact<'s>(
+        intro: Self::Intro<'s>,
+        elim: <Self::Dual as Negative>::Elim<'s>,
+    ) -> Command<'s> {
+        elim(intro)
+    }
 }
 
 impl<N: Negative> Negative for Whynot<N>
@@ -605,38 +468,10 @@ where
     N::Dual: Positive,
 {
     type Dual = Bang<N::Dual>;
-    type Elim<'s> = WhynotElim<'s, N>;
-}
+    type Elim<'s> = Box<dyn FnOnce(Arc<<N::Dual as Positive>::Witness<'s>>) -> Command<'s> + 's>;
+    type Witness<'x> = Box<dyn FnMut(N::Witness<'x>) + 'x>;
 
-/// Elimination form for `Whynot<N>`.
-///
-/// The body receives a [`BangIntro`] — a duplicable producer of
-/// terms. The body may clone the producer any number of times
-/// (zero, one, many), or drop it without use. This is the
-/// exponential destructor `μ̃!x.c`.
-pub struct WhynotElim<'s, N: Negative> {
-    /// Body consuming a `BangIntro`.
-    pub body: Box<dyn FnOnce(BangIntro<'s, N::Dual>) -> Command<'s> + 's>,
-}
-
-impl<A: Positive> Interaction for Bang<A>
-where
-    A::Dual: Negative,
-{
-    fn interact<'s>(
-        intro: Self::Intro<'s>,
-        elim: <Self::Dual as Negative>::Elim<'s>,
-    ) -> Command<'s> {
-        (elim.body)(intro)
-    }
-}
-
-impl<'s, N: Negative> Resolution<'s> for WhynotElim<'s, N>
-where
-    N::Dual: Positive,
-{
-    type PosType = Bang<N::Dual>;
-    fn resolve(self, _resource: Resource<'s, Bang<N::Dual>>) -> Command<'s> {
+    fn resolve<'s>(_: Self::Elim<'s>, _: Resource<'s, Self::Dual>) -> Command<'s> {
         Command::Normal
     }
 }

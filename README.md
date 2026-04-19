@@ -2,7 +2,7 @@
 
 A Rust embedding of linear classical System L. Formulas are types, proofs are programs, and cut-elimination is evaluation. Scope structure is carried by lifetimes; linearity is enforced by move semantics.
 
-This library implements the λμ̃μ-calculus — classical sequent calculus as a programming language. Terms and coterms are symmetric three-variant enums. One `cut` function dispatches over the 3×3 pairing. Per-connective dispatch is handled by the `Interaction` and `Resolution` traits.
+This library implements the λμ̃μ-calculus — classical sequent calculus as a programming language. Terms and coterms are symmetric three-variant enums. One `cut` function dispatches over the 3×3 pairing. Per-connective reduction is handled by the `Positive::interact` and `Negative::resolve` methods.
 
 ## What this is
 
@@ -12,18 +12,42 @@ A research prototype, not a production library. It demonstrates that linear clas
 
 ```toml
 [dependencies]
-sequents = "0.1.0"
+sequents = "0.1.1"
 ```
+
+Atoms are user-defined types that implement `Positive` or `Negative`:
 
 ```rust
 use sequents::*;
 
-struct X; // atomic type
+struct X;          // positive atom
+struct XTag;       // its negative dual
 
-let x: Resource<'static, AtomP<X>> = Resource::new();
-let y: Resource<'static, AtomN<X>> = Resource::new();
+pub struct XElim<'s> {
+    pub body: Box<dyn FnOnce(X) -> Command<'s> + 's>,
+}
+
+impl Positive for X {
+    type Dual = XTag;
+    type Intro<'s> = std::convert::Infallible;
+    type Witness<'x> = X;
+    fn interact<'s>(i: Self::Intro<'s>, _: <Self::Dual as Negative>::Elim<'s>) -> Command<'s> {
+        match i {}
+    }
+}
+
+impl Negative for XTag {
+    type Dual = X;
+    type Elim<'s> = XElim<'s>;
+    type Witness<'x> = XElim<'x>;
+    fn resolve<'s>(e: Self::Elim<'s>, r: Resource<'s, Self::Dual>) -> Command<'s> {
+        (e.body)(r.into_witness())
+    }
+}
 
 // Axiom cut: ⟨x | y⟩ — already in normal form
+let x: Resource<'static, X> = Resource::new(X);
+let y: CoResource<'static, XTag> = CoResource::new(XElim { body: Box::new(|_| Command::Normal) });
 let cmd = cut(x.into(), y.into());
 assert!(matches!(run(cmd), Command::Normal));
 ```
@@ -31,11 +55,11 @@ assert!(matches!(run(cmd), Command::Normal));
 A reduction:
 
 ```rust
-let x: Resource<'static, AtomP<X>> = Resource::new();
-let z: Resource<'static, AtomN<X>> = Resource::new();
+let x: Resource<'static, X> = Resource::new(X);
+let z: CoResource<'static, XTag> = CoResource::new(XElim { body: Box::new(|_| Command::Normal) });
 
 // μ̃y.⟨y | z⟩ — a coterm that substitutes its argument into a cut with z
-let coterm = mu_tilde::<'static, AtomN<X>>(|y| cut(y, z.into()));
+let coterm = mu_tilde::<'static, XTag>(|y| cut(y, z.into()));
 
 // ⟨x | μ̃y.⟨y | z⟩⟩ reduces in one step to ⟨x | z⟩
 let cmd = cut(Term::Axiom(x), coterm);
@@ -47,14 +71,16 @@ Tensor and par:
 
 ```rust
 struct Y;
+struct YTag;
+// ... impl Positive for Y, Negative for YTag (same pattern as X)
 
-let x: Resource<'static, AtomP<X>> = Resource::new();
-let y: Resource<'static, AtomP<Y>> = Resource::new();
+let x: Resource<'static, X> = Resource::new(X);
+let y: Resource<'static, Y> = Resource::new(Y);
 let pair = tensor(x, y);
 
-let coterm = mu_par::<'static, AtomP<X>, AtomP<Y>>(|a, b| {
-    let m: Resource<'_, AtomN<X>> = Resource::new();
-    let n: Resource<'_, AtomN<Y>> = Resource::new();
+let coterm = mu_par::<'static, X, Y>(|a, b| {
+    let m: CoResource<'_, XTag> = CoResource::new(XElim { body: Box::new(|_| Command::Normal) });
+    let n: CoResource<'_, YTag> = CoResource::new(YElim { body: Box::new(|_| Command::Normal) });
     let _ = cut(a, m.into());
     cut(b, n.into())
 });
@@ -69,17 +95,28 @@ let _cmd = cut(pair, coterm);
 - **`cut(term, coterm)`** — pair a term with a coterm of dual type, producing a `Command`
 - **`Command<'s>`** — either `Normal` (canonical form) or `Step` (one reduction remaining)
 - **`run(cmd)`** — drive a command to normal form
-- **`Resource<'x, A>`** — a linear-use token. Non-`Copy`, non-`Clone`. Move semantics enforce single use.
+- **`Resource<'x, A>`** — a linear-use token carrying a `A::Witness<'x>`. Non-`Copy`, non-`Clone`. Move semantics enforce single use.
+- **`CoResource<'x, N>`** — the negative counterpart to `Resource`, carrying an `N::Witness<'x>`.
 
 ## Connectives
 
 | Positive | Negative | Description |
 |----------|----------|-------------|
-| `AtomP<X>` | `AtomN<X>` | Atomic types |
+| User-defined `impl Positive` | User-defined `impl Negative` | Atomic types |
 | `One` | `Bot` | Multiplicative unit (⊥) |
 | `Tensor<A, B>` | `Par<A, B>` | Multiplicative conjunction/disjunction (⊗/⅋) |
 | `Plus<A, B>` | `With<A, B>` | Additive disjunction/conjunction (⊕/&) |
 | `Bang<A>` | `Whynot<N>` | Exponential modality (!/?) |
+
+## Exponentials
+
+`promote` wraps a witness in `Arc` for duplication. `derelict` unwraps one copy:
+
+```rust
+let bang = promote::<'static, X>(X);
+let v1 = derelict::<'static, X>(bang.clone());
+let v2 = derelict::<'static, X>(bang); // fresh term
+```
 
 ## Documentation
 
@@ -101,7 +138,7 @@ See `docs/CITATIONS.md` for full bibliographic details.
 cargo test
 ```
 
-46 tests covering structural typing, operational reduction, commuting conversions, and canonical form production.
+56 tests covering structural typing, operational reduction, commuting conversions, canonical form production, and witness flow.
 
 ## License
 

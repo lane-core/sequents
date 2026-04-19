@@ -1,5 +1,5 @@
 use crate::machine::Command;
-use crate::types::{Coterm, Interaction, Negative, Resolution, Term};
+use crate::types::{Coterm, Negative, Positive, Term};
 
 /// The single cut function: `⟨t | e⟩`.
 ///
@@ -12,7 +12,7 @@ use crate::types::{Coterm, Interaction, Negative, Resolution, Term};
 ///
 /// # The 3×3 dispatch
 ///
-/// | Term \\ Coterm | `Axiom` | `Elim` | `MuTilde` |
+/// | Term \ Coterm | `Axiom` | `Elim` | `MuTilde` |
 /// |----------------|---------|--------|-----------|
 /// | `Axiom` | `Normal` | `Step(e.resolve(v))` | `Step(f(Axiom(v)))` |
 /// | `Intro` | `Normal` | `Step(A::interact(i, e))` | `Step(f(Intro(i)))` |
@@ -20,11 +20,11 @@ use crate::types::{Coterm, Interaction, Negative, Resolution, Term};
 ///
 /// Two cases dispatch per-connective:
 ///
-/// * **Axiom vs Elim** — [`Resolution::resolve`]: the elim's body
+/// * **Axiom vs Elim** — [`Negative::resolve`]: the elim's body
 ///   consumes the resource. For atoms this resolves the variable
 ///   into the body; for composites this is blocked (`Normal`).
 ///
-/// * **Intro vs Elim** — [`Interaction::interact`]: the structural β-rule
+/// * **Intro vs Elim** — [`Positive::interact`]: the structural β-rule
 ///   for the connective fires. For tensor/par, the pair is destructured;
 ///   for plus/with, the injection is inspected; for unit/bot, the body
 ///   runs with no arguments.
@@ -33,9 +33,9 @@ use crate::types::{Coterm, Interaction, Negative, Resolution, Term};
 /// which re-enter `cut` after substituting the bound value.
 ///
 /// Every non-terminal case wraps in [`Command::Step`] — each reduction
-/// is one observable event. See `MMM §7] and [Spiwack, module
-/// `Interaction`] for the underlying rules.
-pub fn cut<'s, A: Interaction>(term: Term<'s, A>, coterm: Coterm<'s, A::Dual>) -> Command<'s>
+/// is one observable event. See `MMM §7]` and [Spiwack, module
+/// [`Positive::interact`] for the underlying rules.
+pub fn cut<'s, A: Positive>(term: Term<'s, A>, coterm: Coterm<'s, A::Dual>) -> Command<'s>
 where
     A::Dual: Negative,
 {
@@ -44,7 +44,9 @@ where
         (Term::Axiom(_), Coterm::Axiom(_)) => Command::Normal,
 
         // Axiom vs Elim: variable resolution (non-trivial only for atoms).
-        (Term::Axiom(v), Coterm::Elim(e)) => Command::Step(Box::new(move || e.resolve(v))),
+        (Term::Axiom(v), Coterm::Elim(e)) => {
+            Command::Step(Box::new(move || <A::Dual as Negative>::resolve(e, v)))
+        }
 
         // Axiom vs MuTilde: commuting conversion — wrap axiom as term.
         (Term::Axiom(v), Coterm::MuTilde(f)) => Command::Step(Box::new(move || f(Term::Axiom(v)))),
