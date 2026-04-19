@@ -1,67 +1,136 @@
 use std::marker::PhantomData;
 
 use crate::machine::Command;
-use crate::var::Var;
 
 // =============================================================================
-// 0.  Uniform term and coterm enums
+// 0.  Linear resource token
 // =============================================================================
 
-/// A positive term at scope `'s`: either a variable or an introduction form.
-pub enum Term<'s, A: Pos> {
-    Var(Var<'s, A>),
-    Intro(A::Intro<'s>),
-}
-
-/// A negative coterm at scope `'s`: either a variable or a binder body.
-pub enum Coterm<'s, N: Neg> {
-    Var(Var<'s, N>),
-    Body(N::Body<'s>),
-}
-
-impl<'s, A: Pos> From<Var<'s, A>> for Term<'s, A> {
-    fn from(v: Var<'s, A>) -> Self {
-        Term::Var(v)
-    }
-}
-
-impl<'s, N: Neg> From<Var<'s, N>> for Coterm<'s, N> {
-    fn from(v: Var<'s, N>) -> Self {
-        Coterm::Var(v)
-    }
-}
-
-// =============================================================================
-// 1.  Polarity traits
-// =============================================================================
-
-/// Positive types: atoms `X`, unit `1`, tensor `A ⊗ B`.
+/// A linear resource token at type `A` in scope `'x`.
 ///
-/// `Dual` computes the De Morgan dual (always in NNF).
-/// `Intro<'s>` is the canonical introduction form at scope `'s`
-/// (not including variables — atoms use `Infallible`).
+/// Non-`Copy`, non-`Clone` — using it twice is a compile error.
+/// The lifetime `'x` is the scope in which this resource is valid.
+pub struct Resource<'x, A> {
+    _marker: PhantomData<&'x ()>,
+    _type: PhantomData<A>,
+}
+
+impl<'x, A> Resource<'x, A> {
+    /// Create a fresh resource token.
+    pub fn new() -> Self {
+        Resource {
+            _marker: PhantomData,
+            _type: PhantomData,
+        }
+    }
+}
+
+impl<'x, A> Default for Resource<'x, A> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Explicitly NOT implementing Clone or Copy.
+// Move semantics enforce linearity.
+
+// =============================================================================
+// 1.  Uniform term and coterm enums
+// =============================================================================
+
+/// A positive term at scope `'s`.
+///
+/// Three variants, symmetric with `Coterm` under duality:
+/// - `Axiom`: the axiom rule — a resource is a term of its type.
+/// - `Intro`: a structural introduction form (per-connective).
+/// - `Mu`: the μ-binder, a general continuation closure.
+pub enum Term<'s, A: Pos> {
+    Axiom(Resource<'s, A>),
+    Intro(A::Intro<'s>),
+    Mu(Box<dyn FnOnce(Coterm<'s, A::Dual>) -> Command<'s> + 's>),
+}
+
+/// A negative coterm at scope `'s`.
+///
+/// Three variants, symmetric with `Term` under duality:
+/// - `Axiom`: the axiom rule — a resource is a coterm of its type.
+/// - `Elim`: a structural elimination form (per-connective).
+/// - `MuTilde`: the μ̃-binder, a general continuation closure.
+pub enum Coterm<'s, N: Neg> {
+    Axiom(Resource<'s, N>),
+    Elim(N::Elim<'s>),
+    MuTilde(Box<dyn FnOnce(Term<'s, N::Dual>) -> Command<'s> + 's>),
+}
+
+impl<'s, A: Pos> From<Resource<'s, A>> for Term<'s, A> {
+    fn from(r: Resource<'s, A>) -> Self {
+        Term::Axiom(r)
+    }
+}
+
+impl<'s, N: Neg> From<Resource<'s, N>> for Coterm<'s, N> {
+    fn from(r: Resource<'s, N>) -> Self {
+        Coterm::Axiom(r)
+    }
+}
+
+// =============================================================================
+// 2.  Polarity traits
+// =============================================================================
+
+/// Positive types: atoms `X`, unit `1`, tensor `A ⊗ B`, plus `A ⊕ B`, bang `!A`.
 pub trait Pos: Sized + 'static {
     /// The De Morgan dual — a negative type.
     type Dual: Neg<Dual = Self>;
     /// The concrete introduction form at scope `'s`.
-    /// For atomic types this is `Infallible` (no intro form besides variables).
+    /// For atomic types this is `Infallible` (no intro form besides axioms).
     type Intro<'s>;
 }
 
-/// Negative types: dual atoms `X⊥`, unit `⊥`, par `A ⅋ B`.
-///
-/// `Dual` computes the De Morgan dual.
-/// `Body<'s>` is the binder body shape at scope `'s`
-/// (not including variables).
+/// Negative types: dual atoms `X⊥`, unit `⊥`, par `A ⅋ B`, with `A & B`, whynot `?A`.
 pub trait Neg: Sized + 'static {
     /// The De Morgan dual — a positive type.
     type Dual: Pos<Dual = Self>;
-    /// The concrete binder body shape at scope `'s`.
-    type Body<'s>;
+    /// The concrete elimination form at scope `'s`.
+    type Elim<'s>: AxiomElim<'s, PosType = Self::Dual>;
 }
 
 // =============================================================================
-// 2.  Atoms
+// 3.  Principal cut trait (pair-relation)
+// =============================================================================
+
+/// The principal cut rule for the positive connective `A` and its dual.
+///
+/// This is a pair-relation between `A`'s intro forms and its dual's elim
+/// forms. The trait is placed on `Pos` for Rust's sake; it could
+/// equivalently be placed on `Neg`. The reduction itself is symmetric —
+/// either side describes the same rule.
+pub trait Principal: Pos
+where
+    Self::Dual: Neg,
+{
+    /// Principal cut: intro form meets elim form. For atoms, unreachable
+    /// (`match intro {}` on `Infallible`). For composites, destructures the
+    /// intro and invokes the elim's body.
+    fn principal<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s>;
+}
+
+// =============================================================================
+// 4.  Axiom-elim interaction (elim-side dispatch)
+// =============================================================================
+
+/// Axiom-elim interaction: an Elim consumes a Resource.
+///
+/// The reduction logic lives with the Elim because the Elim has the body.
+/// For atoms, the body receives the resource as a term.
+/// For composites, the interaction is blocked — returns `Normal`.
+pub trait AxiomElim<'s> {
+    type PosType: Pos;
+    fn axiom_elim(self, resource: Resource<'s, Self::PosType>) -> Command<'s>;
+}
+
+// =============================================================================
+// 5.  Atoms
 // =============================================================================
 
 /// Positive atom `X`.
@@ -72,18 +141,34 @@ pub struct AtomN<X>(PhantomData<X>);
 
 impl<X: 'static> Pos for AtomP<X> {
     type Dual = AtomN<X>;
-    /// Atoms have no introduction form besides variables.
     type Intro<'s> = std::convert::Infallible;
 }
 
 impl<X: 'static> Neg for AtomN<X> {
     type Dual = AtomP<X>;
-    /// Body of `μx⁻.c`: receives a positive term.
-    type Body<'s> = Box<dyn FnOnce(Term<'s, AtomP<X>>) -> Command<'s> + 's>;
+    type Elim<'s> = AtomElim<'s, X>;
+}
+
+/// Elimination form for `AtomN<X>`: body consuming a positive term.
+pub struct AtomElim<'s, X: 'static> {
+    pub body: Box<dyn FnOnce(Term<'s, AtomP<X>>) -> Command<'s> + 's>,
+}
+
+impl<X: 'static> Principal for AtomP<X> {
+    fn principal<'s>(intro: Self::Intro<'s>, _elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+        match intro {}
+    }
+}
+
+impl<'s, X: 'static> AxiomElim<'s> for AtomElim<'s, X> {
+    type PosType = AtomP<X>;
+    fn axiom_elim(self, resource: Resource<'s, AtomP<X>>) -> Command<'s> {
+        (self.body)(Term::Axiom(resource))
+    }
 }
 
 // =============================================================================
-// 3.  Multiplicative units
+// 6.  Multiplicative units
 // =============================================================================
 
 /// Positive unit `1`.
@@ -99,12 +184,29 @@ impl Pos for One {
 
 impl Neg for Bot {
     type Dual = One;
-    /// Body of `μ().c`: receives no argument.
-    type Body<'s> = Box<dyn FnOnce() -> Command<'s> + 's>;
+    type Elim<'s> = BotElim<'s>;
+}
+
+/// Elimination form for `Bot`: a zero-argument body.
+pub struct BotElim<'s> {
+    pub body: Box<dyn FnOnce() -> Command<'s> + 's>,
+}
+
+impl Principal for One {
+    fn principal<'s>(_intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+        (elim.body)()
+    }
+}
+
+impl<'s> AxiomElim<'s> for BotElim<'s> {
+    type PosType = One;
+    fn axiom_elim(self, _resource: Resource<'s, One>) -> Command<'s> {
+        Command::Normal
+    }
 }
 
 // =============================================================================
-// 4.  Multiplicative connectives
+// 7.  Multiplicative connectives
 // =============================================================================
 
 /// Tensor `A ⊗ B` (both components positive).
@@ -119,7 +221,6 @@ where
     B::Dual: Neg,
 {
     type Dual = Par<A::Dual, B::Dual>;
-    /// Tensor introduction: a pair of terms.
     type Intro<'s> = (Term<'s, A>, Term<'s, B>);
 }
 
@@ -129,12 +230,38 @@ where
     B::Dual: Pos,
 {
     type Dual = Tensor<A::Dual, B::Dual>;
-    /// Body of `μ(x ⅋ y).c`: receives two terms.
-    type Body<'s> = Box<dyn FnOnce(Term<'s, A::Dual>, Term<'s, B::Dual>) -> Command<'s> + 's>;
+    type Elim<'s> = ParElim<'s, A::Dual, B::Dual>;
+}
+
+/// Elimination form for `Par<A, B>`: body consuming two terms.
+pub struct ParElim<'s, A: Pos, B: Pos> {
+    pub body: Box<dyn FnOnce(Term<'s, A>, Term<'s, B>) -> Command<'s> + 's>,
+}
+
+impl<A: Pos, B: Pos> Principal for Tensor<A, B>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+{
+    fn principal<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+        let (a, b) = intro;
+        (elim.body)(a, b)
+    }
+}
+
+impl<'s, A: Pos, B: Pos> AxiomElim<'s> for ParElim<'s, A, B>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+{
+    type PosType = Tensor<A, B>;
+    fn axiom_elim(self, _resource: Resource<'s, Tensor<A, B>>) -> Command<'s> {
+        Command::Normal
+    }
 }
 
 // =============================================================================
-// 5.  Additive connectives
+// 8.  Additive connectives
 // =============================================================================
 
 /// Positive sum `A ⊕ B` (choice made at introduction time).
@@ -158,8 +285,17 @@ where
     type Intro<'s> = PlusIntro<'s, A, B>;
 }
 
-/// Body form for `With<A, B>`: two continuations, one per injection.
-pub struct WithBody<'s, A: Neg, B: Neg>
+impl<A: Neg, B: Neg> Neg for With<A, B>
+where
+    A::Dual: Pos,
+    B::Dual: Pos,
+{
+    type Dual = Plus<A::Dual, B::Dual>;
+    type Elim<'s> = WithElim<'s, A, B>;
+}
+
+/// Elimination form for `With<A, B>`: two continuations, one per injection.
+pub struct WithElim<'s, A: Neg, B: Neg>
 where
     A::Dual: Pos,
     B::Dual: Pos,
@@ -168,17 +304,32 @@ where
     pub right: Box<dyn FnOnce(Term<'s, B::Dual>) -> Command<'s> + 's>,
 }
 
-impl<A: Neg, B: Neg> Neg for With<A, B>
+impl<A: Pos, B: Pos> Principal for Plus<A, B>
+where
+    A::Dual: Neg,
+    B::Dual: Neg,
+{
+    fn principal<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+        match intro {
+            PlusIntro::Inl(a) => (elim.left)(a),
+            PlusIntro::Inr(b) => (elim.right)(b),
+        }
+    }
+}
+
+impl<'s, A: Neg, B: Neg> AxiomElim<'s> for WithElim<'s, A, B>
 where
     A::Dual: Pos,
     B::Dual: Pos,
 {
-    type Dual = Plus<A::Dual, B::Dual>;
-    type Body<'s> = WithBody<'s, A, B>;
+    type PosType = Plus<A::Dual, B::Dual>;
+    fn axiom_elim(self, _resource: Resource<'s, Plus<A::Dual, B::Dual>>) -> Command<'s> {
+        Command::Normal
+    }
 }
 
 // =============================================================================
-// 6.  Exponential connectives
+// 9.  Exponential connectives
 // =============================================================================
 
 /// Positive exponential `!A` — duplicable terms.
@@ -215,6 +366,29 @@ where
     N::Dual: Pos,
 {
     type Dual = Bang<N::Dual>;
-    /// Body of `μ!x.c`: receives a `BangIntro`.
-    type Body<'s> = Box<dyn FnOnce(BangIntro<'s, N::Dual>) -> Command<'s> + 's>;
+    type Elim<'s> = WhynotElim<'s, N>;
+}
+
+/// Elimination form for `Whynot<N>`: body consuming a `BangIntro`.
+pub struct WhynotElim<'s, N: Neg> {
+    pub body: Box<dyn FnOnce(BangIntro<'s, N::Dual>) -> Command<'s> + 's>,
+}
+
+impl<A: Pos> Principal for Bang<A>
+where
+    A::Dual: Neg,
+{
+    fn principal<'s>(intro: Self::Intro<'s>, elim: <Self::Dual as Neg>::Elim<'s>) -> Command<'s> {
+        (elim.body)(intro)
+    }
+}
+
+impl<'s, N: Neg> AxiomElim<'s> for WhynotElim<'s, N>
+where
+    N::Dual: Pos,
+{
+    type PosType = Bang<N::Dual>;
+    fn axiom_elim(self, _resource: Resource<'s, Bang<N::Dual>>) -> Command<'s> {
+        Command::Normal
+    }
 }
