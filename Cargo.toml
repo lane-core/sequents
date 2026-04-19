@@ -1,6 +1,6 @@
 [package]
 name = "sequents"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Multiplicative-additive linear System L with exponentials, embedded in Rust's type system"
 license = "BSD-3-Clause"
